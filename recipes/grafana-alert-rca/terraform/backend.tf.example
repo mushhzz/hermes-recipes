@@ -1,0 +1,21 @@
+# Example remote-state backend. Copy to backend.tf (git-ignored isn't
+# necessary — a backend block has no secrets in it) and fill in your own
+# storage. Any Terraform-supported backend works; this shows Azure Blob and
+# AWS S3 as the two most common. Pick one, delete the other.
+
+terraform {
+  # --- Azure Blob ---
+  backend "azurerm" {
+    resource_group_name  = "<YOUR_RESOURCE_GROUP>"
+    storage_account_name = "<YOUR_STORAGE_ACCOUNT>"
+    container_name       = "tfstate"
+    key                  = "grafana-alerting/terraform.tfstate"
+  }
+
+  # --- or AWS S3 ---
+  # backend "s3" {
+  #   bucket = "<YOUR_BUCKET>"
+  #   key    = "grafana-alerting/terraform.tfstate"
+  #   region = "<YOUR_REGION>"
+  # }
+}

@@ -1,0 +1,84 @@
+# ArgoCD Notifications config that sends sync-failure and health-degradation
+# events to the Hermes route configured by configure-route.py in this
+# directory. Merge the `data` keys below into your EXISTING
+# argocd-notifications-cm ConfigMap and argocd-notifications-secret Secret
+# (both already exist once the ArgoCD notifications controller is running —
+# do not replace them wholesale, only add/merge these keys, or you will
+# clobber whatever else already configures notifications in your cluster).
+#
+# If ArgoCD itself is installed via Terraform/Helm in your infra repo (common
+# when Applications are also GitOps-managed with selfHeal: true), manage
+# these as a `kubernetes_config_map_v1_data` / `kubernetes_secret_v1_data`
+# resource instead of applying this by hand with kubectl — those Terraform
+# resources merge individual keys into an existing object via server-side
+# apply, without taking over ownership of keys something else (the Helm
+# chart) manages. A hand kubectl-apply of a full ConfigMap risks being
+# reverted by the next Helm upgrade, and self-heal will revert any direct
+# edit to the Application resource's annotations below — that one has to be
+# a change to the Application manifest in your Git repo, not a live edit.
+
+# --- merge into: kubectl -n argocd get secret argocd-notifications-secret ---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: argocd-notifications-secret
+  namespace: argocd
+stringData:
+  hermes-deploy-rca-token: "<the same secret HERMES_ARGOCD_ROUTE_SECRET was set to>"
+
+---
+# --- merge into: kubectl -n argocd get configmap argocd-notifications-cm ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-notifications-cm
+  namespace: argocd
+data:
+  # ArgoCD's webhook service cannot compute an HMAC of its own request body —
+  # there is no signing key mixed into the payload, only static or
+  # Secret-sourced header values. See configure-route.py's docstring for why
+  # this recipe deliberately reuses Hermes' GitLab-compatible static-token
+  # comparison (X-Gitlab-Token) rather than pretending this is HMAC-signed.
+  service.webhook.hermes-deploy-rca: |
+    url: https://<your-tunnel-or-public-domain>/webhooks/argocd-deploy-rca
+    headers:
+    - name: Content-Type
+      value: application/json
+    - name: X-Gitlab-Token
+      value: $hermes-deploy-rca-token
+
+  template.hermes-deploy-rca: |
+    webhook:
+      hermes-deploy-rca:
+        method: POST
+        body: |
+          {
+            "type": "argocd-deploy-rca",
+            "reason": "{{if eq .app.status.health.status "Degraded"}}health-degraded{{else}}sync-failed{{end}}",
+            "app": "{{.app.metadata.name}}",
+            "namespace": "{{.app.spec.destination.namespace}}",
+            "phase": "{{.app.status.operationState.phase}}",
+            "syncStatus": "{{.app.status.sync.status}}",
+            "healthStatus": "{{.app.status.health.status}}",
+            "revision": "{{.app.status.sync.revision}}",
+            "message": {{toJson .app.status.operationState.message}},
+            "startedAt": "{{.app.status.operationState.startedAt}}",
+            "finishedAt": "{{.app.status.operationState.finishedAt}}"
+          }
+
+  trigger.on-sync-failed: |
+    - when: app.status.operationState.phase in ['Error', 'Failed']
+      oncePer: app.status.operationState.startedAt
+      send: [hermes-deploy-rca]
+
+  trigger.on-health-degraded: |
+    - when: app.status.health.status == 'Degraded'
+      send: [hermes-deploy-rca]
+
+---
+# --- add these two annotations to the Application resource you want covered
+#     (e.g. k8s/argocd/applications/<your-app>.yaml in your GitOps repo) ---
+# metadata:
+#   annotations:
+#     notifications.argoproj.io/subscribe.on-sync-failed.hermes-deploy-rca: ""
+#     notifications.argoproj.io/subscribe.on-health-degraded.hermes-deploy-rca: ""

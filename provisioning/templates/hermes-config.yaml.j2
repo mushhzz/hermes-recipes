@@ -1,0 +1,14 @@
+# Managed by Ansible (playbook.yml) — provisioning/templates/hermes-config.yaml.j2
+# Everything not set here uses Hermes's built-in defaults; see the Hermes docs
+# for the full config reference.
+
+model:
+  provider: "openai-codex"  # or any provider Hermes supports; auth is separate (see .env.j2)
+  # default: left unset on purpose — pick a model with `hermes model` or
+  #   `hermes setup` once authenticated. The config file only takes a real
+  #   model id once you know which model your provider/subscription exposes.
+
+# Always create an isolated git worktree per session when run inside a git
+# repo — matches the ~/dev/repos + ~/dev/worktrees layout this playbook sets
+# up, so a Hermes session never works directly on a repo's primary checkout.
+worktree: true

@@ -1,0 +1,43 @@
+{{/*
+  Webhook payload sent to the Hermes gateway.
+
+  Hermes routes on the top-level "type" field (its webhook adapter reads
+  payload.type when no X-GitHub-Event header is present), filters on
+  "status", and renders its triage prompt from the flat fields below.
+  Keep this shape stable: the Hermes route prompt references these keys.
+*/}}
+{{ define "hermes.payload" -}}
+{{ coll.Dict
+  "type" "grafana-alert"
+  "status" .Status
+  "alertname" (index .CommonLabels "alertname")
+  "environment" (index .CommonLabels "deployment_environment")
+  "namespace" (index .CommonLabels "namespace")
+  "error_type" (index .CommonLabels "error_type")
+  "severity" (index .CommonLabels "severity")
+  "summary" (index .CommonAnnotations "summary")
+  "description" (index .CommonAnnotations "description")
+  "loki_query" (index .CommonAnnotations "loki_query")
+  "runbook_url" (index .CommonAnnotations "runbook_url")
+  "alert_count" (len .Alerts)
+  "alerts" (tmpl.Exec "hermes.alerts" .Alerts | data.JSON)
+  "externalURL" .ExternalURL
+  "groupKey" .GroupKey
+| data.ToJSON }}
+{{- end }}
+
+{{ define "hermes.alerts" -}}
+{{- $out := coll.Slice -}}
+{{- range . -}}
+{{ $out = coll.Append (coll.Dict
+  "status" .Status
+  "labels" .Labels
+  "annotations" .Annotations
+  "startsAt" (.StartsAt | date "2006-01-02T15:04:05Z07:00")
+  "values" .Values
+  "panelURL" .PanelURL
+  "silenceURL" .SilenceURL
+) $out }}
+{{- end -}}
+{{ $out | data.ToJSON }}
+{{- end }}
