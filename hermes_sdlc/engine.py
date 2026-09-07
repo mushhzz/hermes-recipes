@@ -137,10 +137,14 @@ class Engine:
             size += len(text.encode())
             files[relative] = text
         project = self.config['projects'][run['project']]
-        return {'title': run['title'], 'task': run['body'], 'kind': run['kind'],
-                'repository_files': paths[:5000], 'files': files, 'allowed_paths': project['allowed_paths'],
-                'checks': [{'name': c['name'], 'argv': c['argv']} for c in project['checks']],
-                'specification': run['data'].get('spec'), 'base_sha': run['data'].get('base_sha')}
+        context = {'title': run['title'], 'kind': run['kind'],
+                   'repository_files': paths[:5000], 'files': files, 'allowed_paths': project['allowed_paths'],
+                   'checks': [{'name': c['name'], 'argv': c['argv']} for c in project['checks']],
+                   'specification': run['data'].get('spec'), 'base_sha': run['data'].get('base_sha')}
+        if selected is None:
+            # Original issue requirements inform drafts, not an already revised approval.
+            context['task'] = run['body']
+        return context
 
     def propose(self, job, stage, context):
         run = self.store.get(job['run_id'])
