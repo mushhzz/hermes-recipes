@@ -129,19 +129,36 @@ class Store:
             self._job(db, None, 'event', envelope, key)
             return not bool(existing)
 
-    def approve(self, run_id, digest, actor):
+    def approve(self, run_id, digest, actor, *, plan_comment=None):
         with self.transaction() as db:
             run = self._run(db.execute('SELECT * FROM runs WHERE id=?', (run_id,)).fetchone())
             if run['data'].get('spec_hash') != digest:
                 raise Conflict('Approval does not match the current specification')
             if db.execute('SELECT 1 FROM approvals WHERE run_id=? AND digest=?', (run_id, digest)).fetchone():
                 return
+            if plan_comment is not None and run['data'].get('plan_comment') != plan_comment:
+                raise Conflict('Published plan changed before approval')
             if run['state'] != 'awaiting_approval':
                 raise Conflict('Run is not awaiting approval')
             db.execute('INSERT INTO approvals VALUES(?,?,?,?)', (run_id, digest, actor, time.time()))
             db.execute('UPDATE runs SET state=?,updated=? WHERE id=?', ('queued', time.time(), run_id))
             self._job(db, run_id, 'implement', {}, f'{run_id}:implement:{digest}')
             self._evidence(db, run_id, 'approved', {'actor': actor, 'spec_hash': digest})
+
+    def record_plan_comment(self, snapshot, comment_id, body):
+        """Checkpoint the exact GitHub projection without overwriting a newer revision."""
+        with self.transaction() as db:
+            run = self._run(db.execute('SELECT * FROM runs WHERE id=?', (snapshot['id'],)).fetchone())
+            if (run['state'], run['data'].get('spec_hash')) != (snapshot['state'], snapshot['data'].get('spec_hash')):
+                raise Conflict('Plan changed during publication')
+            metadata = {'id': comment_id, 'body': body, 'body_hash': hashlib.sha256(body.encode()).hexdigest(),
+                        'spec_hash': run['data'].get('spec_hash'), 'revision': run['data']['spec']['revision']}
+            if run['data'].get('plan_comment') == metadata:
+                return
+            run['data']['plan_comment'] = metadata
+            db.execute('UPDATE runs SET data=?,updated=? WHERE id=?',
+                       (canonical(run['data']), time.time(), run['id']))
+            self._evidence(db, run['id'], 'plan_published', metadata)
 
     def schedule(self, run_id, action, payload, key, states, updates=None, available=None):
         with self.transaction() as db:
@@ -267,8 +284,8 @@ class Store:
             sequence = data.get('recoveries', 0) + 1
             data['recoveries'] = sequence
             if action == 'plan':
-                if data.get('head_sha'):
-                    raise Conflict('Cancel and submit a new task to change scope after implementation')
+                if data.get('head_sha') or db.execute('SELECT 1 FROM approvals WHERE run_id=?', (run_id,)).fetchone():
+                    raise Conflict('Submit a new task to change scope after approval')
                 data.pop('spec_hash', None)
                 data['spec_revision'] = data.get('spec_revision', 0) + 1
             elif action == 'verify':

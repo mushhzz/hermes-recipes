@@ -155,22 +155,27 @@ Use one issue per independently verifiable task. Choose one task-type label: `fe
 
 An authorized human-created issue starts planning. Externally bot-created or `auto-triaged` issues require an authorized human's `ready-to-fix` handoff. Native authenticated incidents create their own Kira run and issue directly, then stop at the same exact-plan approval gate.
 
-Kira publishes a Markdown plan with file scope, acceptance checkboxes, numbered steps, design, rollback and a copyable approval command. Technical references are collapsed. Formatting does not change the specification hash.
+Kira maintains one Markdown plan comment with file scope, acceptance criteria, numbered steps, design, rollback, current revision and status. Revisions update that comment in place and summarize which parts changed. Technical references are collapsed; complete specifications and approvals remain in append-only private evidence.
 
-Humans personally post these commands on the matching issue or PR:
+Before approval, post ordinary feedback on the issue using an allowlisted human account. Kira revises the draft within host-owned scope and clears its approval control. Comments received during planning wait for its checkpoint rather than disappearing. After approval, use native PR reviews for scoped implementation feedback; a scope change requires a new issue.
+
+To authorize implementation, tick **Approve this revision for implementation** in the canonical Kira comment. Only that checkbox may change. Kira verifies the acting editor, live repository permission, bot ownership, comment/issue identity, exact previous and current body, and current specification hash. Old revisions, copied controls, altered plan text and bot edits cannot approve work. Approval is atomic and duplicate deliveries cannot schedule a second implementation. Labels do not grant approval.
+
+The first genuine bot-authored plan is adopted for an existing unapproved run. Other historical plan comments are not actionable; an operator can mark them superseded. The canonical comment displays subsequent status and the approver. Invalid approval edits are rejected and the authoritative display is restored when GitHub is reachable.
+
+The normal workflow needs no commands. These operator controls remain available on the matching issue or PR:
 
 | Command | Effect |
 | :--- | :--- |
-| `/sdlc approve RUN HASH` | Approve the exact reviewed specification |
 | `/sdlc status RUN` | Request observed run status |
 | `/sdlc cancel RUN` | Cancel the run |
-| `/sdlc recover RUN plan` | Request a new bounded planning attempt |
+| `/sdlc recover RUN plan` | Retry failed, unapproved planning from `needs_human`; ordinary draft feedback needs no command |
 | `/sdlc recover RUN revise` | Recover implementation within approved scope |
 | `/sdlc recover RUN verify` | Reobserve the authentic deployment |
 
-The controller checks the live comment author/body, resource association, configured human allowlist and repository permission. An agent may explain a command, but must not submit approval, merge or deployment for the human.
+Operator commands verify the live human author, body, resource association and repository permission. The old approval command is not accepted. Kira itself cannot approve, merge or deploy.
 
-Recovery feedback may follow the command on subsequent lines. Replanning creates a new revision and hash requiring new approval. After implementation starts, a scope change requires a new task rather than reusing approval.
+Recovery feedback may follow an operator recovery command. Replanning after any approval is forbidden, even if implementation has not yet produced a commit.
 
 ## Checks and PR review
 

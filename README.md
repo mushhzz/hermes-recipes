@@ -38,13 +38,11 @@ Describe what should change, what must stay unchanged and how you will judge suc
 
 ### Review the plan
 
-Kira posts a readable plan with an acceptance checklist and an exact approval command. After reviewing it, post that command yourself:
+Kira keeps one plan comment up to date, including its revision, scope and current status. Before approval, reply normally with feedback; Kira revises that same comment and clears the approval control.
 
-```text
-/sdlc approve RUN HASH
-```
+When the plan is right, tick **Approve this revision for implementation** in Kira's comment. No command or hash copying is needed.
 
-Implementation starts only after the controller verifies your identity, repository permission and specification hash.
+Implementation starts only after the controller verifies the checkbox editor's identity, repository permission and exact displayed revision. Changing plan text or clicking an old revision cannot approve work.
 
 ### Review the pull request
 

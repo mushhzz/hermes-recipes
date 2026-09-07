@@ -9,7 +9,7 @@
 | Boundary | Enforcement |
 | :--- | :--- |
 | Event intake | Host-bound source/project mapping, bounded JSON, HMAC-SHA256 (GitHub/Grafana/deployment) or private static token (ArgoCD), durable delivery identity |
-| Plan approval | Configured human allowlist, live GitHub identity/permission and exact specification hash |
+| Plan approval | Authorized human editor, canonical bot-owned comment, exact old/new/live body, current revision/hash and atomic approval |
 | File changes | Host-enforced path allowlists, approved scope, size limits and symlink/traversal rejection |
 | Checks | Trusted argument arrays executed in constrained, credential-free Docker containers |
 | Publication | Explicit enablement, verified GitHub App identity and configured repository only |
@@ -62,7 +62,9 @@ The shared-ingress configuration routes `/kira/` endpoints to Kira and preserves
 
 ## Human controls
 
-Humans personally post approval, status, cancellation and recovery commands on the matching issue or PR. The controller verifies the live comment author, body, resource association and authority.
+Humans approve by checking the action checkbox in Kira's canonical plan comment. The webhook sender is the acting human; the original comment author remains the bot. The controller verifies live identity/permission, matching repository/issue/comment, exact stored prior rendering, the single allowed checkbox change and the live resulting body. It then atomically binds approval to the current specification and stored projection. Stale revisions, copied controls, plan-text changes, acceptance-checkbox edits and bot actions cannot grant approval.
+
+Before approval, ordinary allowlisted human issue comments request a new draft, never implementation. Replanning clears the approval action and invalidates stale renderings. After any approval, scope changes require a new task. Labels are not authorization. Necessary status, cancellation and failure-recovery commands remain authenticated operator controls; the former approval command is removed.
 
 Kira may explain a plan or review, but must not approve, merge or deploy for the human. Branch protection is necessary because the controller cannot prevent actions taken outside its own workflow.
 

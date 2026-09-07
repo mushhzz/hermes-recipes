@@ -85,18 +85,16 @@ For an explicit GitHub repository-setup request, inspect `provisioning/github.js
 ## Planning and status
 
 1. Translate the user's request into a clear title and a local body file describing intent, constraints and acceptance criteria. With the user's authorization, create the issue: `gh issue create --repo owner/repo --title "Requested change" --body-file /absolute/path/request.txt`. Do not pass issue content as shell code.
-2. Read the issue and controller-published plan: `gh issue view ISSUE --repo owner/repo --comments`. Extract the actual run ID and specification hash from the controller's evidence; never invent them. Present the exact scope and hash to the human.
-3. Add context for human discussion with `gh issue comment ISSUE --repo owner/repo --body-file /absolute/path/context.txt`. Ordinary comments do not change the controller's task/specification. To revise a plan, the human must use a `recover ... plan` command with the clarification as feedback, then approve the new hash.
+2. Read the controller's canonical plan comment with `gh issue view ISSUE --repo owner/repo --comments`. Present its current revision, scope and acceptance criteria; technical hashes remain internal audit references.
+3. Before approval, ordinary comments from an authorized human revise the draft: `gh issue comment ISSUE --repo owner/repo --body-file /absolute/path/context.txt`. Kira updates the same plan comment and clears approval. The human checks **Approve this revision for implementation** in that comment when satisfied; no approval command or hash copying is needed.
 4. Inspect progress with `gh issue view ISSUE --repo owner/repo --comments` and `gh pr view PR --repo owner/repo --comments --json number,url,state,headRefOid,reviewDecision,statusCheckRollup,comments`. Queued or accepted is not completed; report observed evidence and blockers.
 
 ## Human GitHub controls
 
-The human must personally post these commands as comments on the matching run's issue or PR:
-
-- `/sdlc approve RUN HASH` — approve the exact current specification after reviewing it.
+Normal feedback is an ordinary issue comment; normal approval is the canonical plan's revision-bound checkbox. The editor must be an authorized human even though the comment author is Kira. Changed plan text, old revisions, copied checkboxes and bot edits cannot authorize implementation. These commands are reserved for operator controls:
 - `/sdlc status RUN` — request current run status.
 - `/sdlc cancel RUN` — cancel the run.
-- `/sdlc recover RUN plan` — recover planning.
+- `/sdlc recover RUN plan` — retry failed unapproved planning from needs_human, not normal draft feedback.
 - `/sdlc recover RUN revise` — recover revision.
 - `/sdlc recover RUN verify` — recover production verification.
 

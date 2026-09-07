@@ -179,13 +179,14 @@ class LifecycleScenarios(unittest.TestCase):
         with self.assertRaises(Conflict):
             self.store.retry(old['id'])
 
-    def test_replanning_invalidates_prior_specification(self):
+    def test_approved_scope_cannot_be_replanned_before_first_commit(self):
         run, digest = self.approved_run()
         job = self.store.claim(10, 2)
         self.store.finish(job, 'needs_human')
-        self.store.recover(run['id'], 'plan', 'human', 'scope changed')
         with self.assertRaises(Conflict):
-            self.store.approve(run['id'], digest, 'human')
+            self.store.recover(run['id'], 'plan', 'human', 'scope changed')
+        self.assertEqual(self.store.get(run['id'])['data']['spec_hash'], digest)
+        self.assertIsNone(self.store.claim(10, 2))
 
     def test_submission_keys_are_project_scoped_and_reject_changed_intent(self):
         first = self.store.create('acme/app', 'bug', 'task', 'same', key='ticket')
