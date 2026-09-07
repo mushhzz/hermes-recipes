@@ -26,7 +26,7 @@ Kira investigates Grafana alerts, CI failures and deployment failures, plans cha
 | [Grafana alerts](integrations/grafana/README.md) | Investigates Loki evidence and source code; proposes a fix or justified Terraform alert tuning |
 | [CI failures](integrations/ci/README.md) | Reads failed jobs and logs; distinguishes application regressions from CI configuration problems |
 | [Deployment failures](integrations/deployments/README.md) | Investigates ArgoCD sync/health failures; proposes remediation without touching the live cluster |
-| GitHub issues | Plans features, bugs, maintenance and migrations |
+| [GitHub issues](https://github.com/mushhzz/hermes-recipes/issues/new) | Plans features, bugs, maintenance and migrations |
 
 **One controller, one approval gate.** Integrations collect signals; they do not run separate coding agents or open tuning PRs. Alert rules, workflow files and application code all require an approved plan, scoped checks and human PR review.
 
