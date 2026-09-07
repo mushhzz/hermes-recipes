@@ -20,6 +20,8 @@ class GitHubWorkflowTests(unittest.TestCase):
         self.runtime = Mock(spec=Runtime)
         self.runtime.identity.return_value = 'robot'
         self.comments = {}
+        self.labels = {'feature', 'team:core', 'kira:custom'}
+        self.issue = {'state': 'open', 'user': {'login': 'human'}}
         self.permission = 'write'
         self.runtime.github.side_effect = self.github
         self.engine = Engine(config, self.runtime)
@@ -39,6 +41,14 @@ class GitHubWorkflowTests(unittest.TestCase):
             return {'type': 'User'}
         if path.endswith('/collaborators/human/permission'):
             return {'permission': self.permission}
+        if method == 'GET' and path == '/repos/acme/app/issues/7':
+            return {**self.issue, 'labels': [{'name': name} for name in sorted(self.labels)]}
+        if method == 'POST' and path == '/repos/acme/app/issues/7/labels':
+            self.labels.update(body['labels'])
+            return [{'name': name} for name in sorted(self.labels)]
+        if method == 'DELETE' and '/issues/7/labels/' in path:
+            self.labels.remove(path.rsplit('/', 1)[1])
+            return []
         if '/issues/comments/' in path:
             comment = self.comments[int(path.rsplit('/', 1)[1])]
             if method == 'PATCH':
@@ -266,6 +276,31 @@ class GitHubWorkflowTests(unittest.TestCase):
         self.assertNotIn('Private task context', self.comments[self.plan_id]['body'])
         self.assertNotIn(self.temp.name, self.comments[self.plan_id]['body'])
         self.assertEqual(self.store.get(self.run['id'])['state'], 'awaiting_approval')
+
+    def test_metadata_preserves_other_labels_and_merge_is_not_verification(self):
+        unrelated = {'feature', 'team:core', 'kira:custom'}
+        self.assertEqual(self.labels, unrelated | {'kira:awaiting-approval'})
+        self.store.transition(self.run['id'], 'awaiting_review', {'awaiting_approval'}, {'pr': {'number': 9}})
+        self.engine.publish_plan(self.run['id'])
+        self.assertEqual(self.labels, unrelated | {'kira:awaiting-review'})
+        self.issue['state'] = 'closed'
+        self.store.transition(self.run['id'], 'awaiting_deployment', {'awaiting_review'}, {'merge_sha': 'b' * 40})
+        self.engine.publish_plan(self.run['id'])
+        self.engine.publish_plan(self.run['id'])
+        self.assertEqual(self.labels, unrelated | {'kira:merged'})
+        self.assertEqual(self.issue['state'], 'closed')
+
+    def test_failed_production_check_does_not_reopen_merged_implementation_issue(self):
+        self.issue.update(state='closed', user={'login': 'robot'})
+        deployment = {'id': 1, 'sha': 'b' * 40}
+        self.store.schedule(self.run['id'], 'verify', {'deployment': deployment}, 'verify-real-revision',
+                            {'awaiting_approval'}, {'deployment': deployment})
+        self.runtime.production.return_value = [{'passed': False, 'inconclusive': True}]
+        self.engine.tick()
+        self.assertEqual(self.store.get(self.run['id'])['state'], 'needs_human')
+        self.assertEqual(self.issue['state'], 'closed')
+        self.assertIn('kira:needs-human', self.labels)
+        self.assertNotIn('kira:verified', self.labels)
 
 
 if __name__ == '__main__':

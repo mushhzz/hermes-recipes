@@ -78,6 +78,8 @@ One bot-owned GitHub comment presents the current plan and state. SQLite stores 
 
 Ordinary authorized issue comments before approval schedule bounded replanning. In-flight planning defers feedback and early checkbox events through the existing durable event queue. Checkbox approval compares the webhook's previous body and live updated body against the exact canonical rendering, then atomically checks the current stored projection and specification. Only the designated unchecked-to-checked action is permitted. Approval locks scope; subsequent implementation feedback uses native PR reviews.
 
+GitHub's Development relationship uses a closing reference in the PR body. A human merge closes the implementation issue; the controller continues tracking deployment separately. Owned lifecycle labels project run state without replacing task/team labels or inventing assignments. `awaiting_deployment` is displayed as `kira:merged`, never `kira:verified`. Production outcomes do not reopen the implementation issue.
+
 | Model stage | Structured result |
 | :--- | :--- |
 | Plan | `summary`, `acceptance`, `risk`, `files`, `steps`, `design`, `rollback` |

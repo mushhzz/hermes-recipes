@@ -163,6 +163,8 @@ To authorize implementation, tick **Approve this revision for implementation** i
 
 The first genuine bot-authored plan is adopted for an existing unapproved run. Other historical plan comments are not actionable; an operator can mark them superseded. The canonical comment displays subsequent status and the approver. Invalid approval edits are rejected and the authoritative display is restored when GitHub is reachable.
 
+Kira maintains one owned lifecycle label: `kira:queued`, `kira:planning`, `kira:awaiting-approval`, `kira:implementing`, `kira:awaiting-review`, `kira:merged`, `kira:verifying`, `kira:verified`, `kira:needs-human` or `kira:cancelled`. Other labels and manually chosen assignees, projects and milestones are preserved. Missing lifecycle labels are created by GitHub when first applied; provisioning can predefine their colors.
+
 The normal workflow needs no commands. These operator controls remain available on the matching issue or PR:
 
 | Command | Effect |
@@ -181,7 +183,7 @@ Recovery feedback may follow an operator recovery command. Replanning after any 
 
 The controller validates proposed paths before writing, runs all configured Docker checks and requests an independent model review. Repairs are bounded by attempt and model-call limits.
 
-Publication uses a stable `sdlc/RUN` branch and reconciles an existing PR. It never force-pushes. PRs reference originating issues without implying that merge completes production verification.
+Publication uses a stable `sdlc/RUN` branch and reconciles an existing PR. It never force-pushes. PRs use `Closes #ISSUE`, creating the native Development link and closing the implementation issue when a human merges. The canonical plan also links to the PR. Issue closure and `kira:merged` mean implementation completed, not deployment verified.
 
 Use GitHub request-changes reviews for implementation feedback. Authorized current-head reviews/comments and matching failed CI may trigger revision. Stale or unrelated feedback cannot authorize changes to a newer head.
 
@@ -202,7 +204,7 @@ Kira waits for the configured observation period and gathers live evidence:
 
 Missing, stale, nonfinite, negative or incomplete evidence cannot pass. Validate queries against known-good and known-bad releases. A health response alone is not proof of all application behavior.
 
-Only bot-authored issues may be automatically closed or reopened. Human-authored issues receive evidence comments. Failed verification requires human attention; Kira does not roll back.
+Deployment outcomes update the durable run, plan and lifecycle label even after the implementation issue closes. Failed or inconclusive verification requires human attention; it does not reopen completed implementation work or perform rollback. Only actual successful production checks produce `kira:verified`.
 
 ## Webhook contract
 

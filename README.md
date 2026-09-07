@@ -48,6 +48,8 @@ Implementation starts only after the controller verifies the checkbox editor's i
 
 Inspect the diff and CI results. Request changes through GitHub reviews; merge only when you are satisfied. Status, cancellation and recovery commands are documented in [Operations](docs/operations.md#github-controls).
 
+The linked issue closes when its PR merges. Kira keeps the plan and `kira:*` lifecycle label current; deployment verification remains separate from implementation completion.
+
 ## Get started
 
 Run the installer **on your always-on service host**, with Python 3.11+, an installed and authenticated [Hermes runtime](https://hermes-agent.nousresearch.com), Git, GitHub CLI, OpenSSL and Docker. The included [Linux playbook](provisioning/playbook.yml) can provision that host from your workstation.
