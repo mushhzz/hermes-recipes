@@ -80,6 +80,8 @@ Ordinary authorized issue comments before approval schedule bounded replanning. 
 
 Only planning receives the original issue body. Implementation, revision and review receive the approved specification instead of superseded initial requirements, so an older issue description cannot compete with a revised approval.
 
+Authorized PR feedback is preserved separately from machine-generated repair findings and supplied to both implementation and independent review. Each receives whether the work is an initial implementation or a PR revision. A revision with no new change relative to its previous PR head cannot be reported as completed merely because the existing diff passes review.
+
 GitHub's Development relationship uses a closing reference in the PR body. A human merge closes the implementation issue; the controller continues tracking deployment separately. Owned lifecycle labels project run state without replacing task/team labels or inventing assignments. `awaiting_deployment` is displayed as `kira:merged`, never `kira:verified`. Production outcomes do not reopen the implementation issue.
 
 | Model stage | Structured result |
