@@ -20,6 +20,38 @@ class Deferred(RuntimeError):
     """Authenticated event arrived before its lifecycle prerequisite."""
 
 
+def _plan_comment(run_id, spec, digest):
+    """Present the unchanged, fingerprinted specification for human review."""
+    from html import escape
+
+    def items(values, numbered=False):
+        return '\n'.join(
+            (f'{index}. ' if numbered else '- [ ] ') + value.replace('\n', '\n   ')
+            for index, value in enumerate(values, 1))
+
+    scope = '\n'.join('- <code>' + escape(path) + '</code>' for path in spec['files'])
+    return (
+        '## Kira · Implementation plan\n\n'
+        + spec['summary'] + '\n\n'
+        + f'**Risk:** {spec["risk"].capitalize()} · **Status:** Awaiting human approval\n\n'
+        + '### Scope\n\n' + scope + '\n\n'
+        + '### Acceptance criteria\n\n' + items(spec['acceptance']) + '\n\n'
+        + '### Implementation steps\n\n' + items(spec['steps'], numbered=True) + '\n\n'
+        + '### Design\n\n' + spec['design'] + '\n\n'
+        + '### Rollback\n\n' + spec['rollback'] + '\n\n'
+        + '### Approve this plan\n\n'
+        + 'After reviewing the scope and acceptance criteria, post this command as a new comment. '
+          'Approval authorizes implementation only—not PR merge or deployment.\n\n'
+        + f'```text\n/sdlc approve {run_id} {digest}\n```\n\n'
+        + '<details>\n<summary>Specification reference</summary>\n\n'
+        + f'- **Run:** `{run_id}`\n'
+        + f'- **Base commit:** `{spec["base_sha"]}`\n'
+        + f'- **Revision:** {spec["revision"]}\n'
+        + f'- **SHA-256:** `{digest}`\n\n'
+        + '</details>'
+    )
+
+
 class Engine:
     def __init__(self, config, runtime=None):
         self.config = config
@@ -120,8 +152,7 @@ class Engine:
         spec['revision'] = run['data'].get('spec_revision', 0)
         digest = fingerprint(spec)
         self.store.checkpoint(job, {'spec': spec, 'spec_hash': digest}, 'specification', {'spec': spec, 'digest': digest})
-        self.comment(run, f'plan-{digest}', '## Hermes SDLC plan\n\n' + json.dumps(spec, indent=2) +
-                     f'\n\nApprove this exact specification with:\n`/sdlc approve {run["id"]} {digest}`')
+        self.comment(run, f'plan-{digest}', _plan_comment(run['id'], spec, digest))
         self.store.finish(job, 'awaiting_approval')
 
     def apply_changes(self, workspace, project, spec, proposal):

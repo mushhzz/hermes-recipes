@@ -148,6 +148,8 @@ Issue creation is a requested GitHub write; use the intended authenticated accou
 
 Planning pins a commit and produces summary, risk, acceptance, exact files, steps, design and rollback. The plan identifies the run and specification hash on GitHub when publication is configured. **No live plan/status comments or PR publication until a dedicated bot is configured and publication explicitly enabled.** The default disabled mode retains local artifacts for maintainers; it is not a working live GitHub delivery setup.
 
+Plans render as GitHub Markdown: summary and risk, file scope, acceptance checkboxes, numbered implementation steps, design, rollback and a copyable approval command. Run/base/revision/hash metadata is collapsed under “Specification reference.” Presentation does not change the stored specification or its approval hash; reformatting a comment is not replanning or approval.
+
 After reviewing the exact plan, the human posts this comment on the matching issue (or the run's matching PR where applicable):
 
 ```text
