@@ -64,6 +64,8 @@ The shared-ingress configuration routes `/kira/` endpoints to Kira and preserves
 
 Humans approve by checking the action checkbox in Kira's canonical plan comment. The webhook sender is the acting human; the original comment author remains the bot. The controller verifies live identity/permission, matching repository/issue/comment, exact stored prior rendering, the single allowed checkbox change and the live resulting body. It then atomically binds approval to the current specification and stored projection. Stale revisions, copied controls, plan-text changes, acceptance-checkbox edits and bot actions cannot grant approval.
 
+Model prose is HTML-escaped and kept in separate Markdown blocks so it cannot conceal trusted scope and approval controls. The rendered document is checked for ambiguous approval controls.
+
 Before approval, ordinary allowlisted human issue comments request a new draft, never implementation. Replanning clears the approval action and invalidates stale renderings. After any approval, scope changes require a new task. Labels are not authorization. Necessary status, cancellation and failure-recovery commands remain authenticated operator controls; the former approval command is removed.
 
 Kira may explain a plan or review, but must not approve, merge or deploy for the human. Branch protection is necessary because the controller cannot prevent actions taken outside its own workflow.
@@ -81,5 +83,7 @@ Anyone able to edit trusted configuration/state or execute arbitrary code as the
 The host OS, Docker runtime/images, installed Hermes code, provider SDKs and configured external services are trusted.
 
 A merge does not establish deployment. Verification requires the deployed SHA, environment, timestamp, observation period and configured live evidence. Missing telemetry is inconclusive; low error counts without traffic, freshness and coverage are not recovery proof.
+
+A native PR closing reference closes the implementation issue on human merge. This UI event and the `kira:merged` label are not production evidence. Deployment results remain in the run, canonical plan and lifecycle labels; failed checks never become verified because the issue is closed.
 
 HTTP health establishes the configured observation, not every application behavior. Loki selectors and thresholds are operator-owned. Validate them against known-good and known-bad releases before relying on automatic verification.

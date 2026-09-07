@@ -15,6 +15,13 @@ from .incidents import normalize
 
 SHA = re.compile(r'^[0-9a-f]{40}$')
 KINDS = {'feature', 'bug', 'incident', 'maintenance', 'migration'}
+STATE_LABELS = {
+    'queued': 'kira:queued', 'planning': 'kira:planning',
+    'awaiting_approval': 'kira:awaiting-approval', 'implementing': 'kira:implementing',
+    'awaiting_review': 'kira:awaiting-review', 'awaiting_deployment': 'kira:merged',
+    'verifying': 'kira:verifying', 'verified': 'kira:verified',
+    'needs_human': 'kira:needs-human', 'failed': 'kira:needs-human', 'cancelled': 'kira:cancelled',
+}
 
 APPROVAL_UNCHECKED = '- [ ] Approve this revision for implementation'
 APPROVAL_CHECKED = '- [x] Approve this revision for implementation'
@@ -27,13 +34,13 @@ def _plan_comment(run_id, spec, digest, *, state='awaiting_approval', approved_b
     """Present the unchanged, fingerprinted specification for human review."""
     from html import escape
 
-    def text(value):
-        # Model prose cannot open HTML/Markdown constructs around trusted controls.
-        return re.sub(r'([\\`*_\[\]{}()#+.!|>~-])', r'\\\1', escape(value))
+    def prose(value):
+        # Contain model Markdown in its own block; it cannot hide later controls.
+        return '\n'.join('> ' + escape(line) for line in value.splitlines())
 
     def items(values, numbered=False):
         return '\n'.join(
-            (f'{index}. ' if numbered else '- ') + text(value).replace('\n', '\n   ')
+            (f'{index}. ' if numbered else '- ') + escape(value).replace('\n', '\n   ')
             for index, value in enumerate(values, 1))
 
     scope = '\n'.join('- <code>' + escape(path) + '</code>' for path in spec['files'])
@@ -47,14 +54,14 @@ def _plan_comment(run_id, spec, digest, *, state='awaiting_approval', approved_b
         'Approval is unavailable while this run is ' + status.lower() + '.')
     return (
         '## Kira · Implementation plan\n\n'
-        + text(spec['summary']) + '\n\n'
+        + prose(spec['summary']) + '\n\n'
         + f'**Risk:** {spec["risk"].capitalize()} · **Status:** {status} · **Revision:** {spec["revision"]}\n\n'
         + ('### Changed since previous revision\n\n' + '\n'.join('- ' + item for item in changes) + '\n\n' if changes else '')
         + '### Scope\n\n' + scope + '\n\n'
         + '### Acceptance criteria\n\n' + items(spec['acceptance']) + '\n\n'
         + '### Implementation steps\n\n' + items(spec['steps'], numbered=True) + '\n\n'
-        + '### Design\n\n' + text(spec['design']) + '\n\n'
-        + '### Rollback\n\n' + text(spec['rollback']) + '\n\n'
+        + '### Design\n\n' + prose(spec['design']) + '\n\n'
+        + '### Rollback\n\n' + prose(spec['rollback']) + '\n\n'
         + '### Approve this plan\n\n'
         + 'Discuss changes in an ordinary issue comment before approving. '
           'Approval authorizes implementation only—not PR merge or deployment.\n\n'
@@ -285,12 +292,32 @@ class Engine:
         run = self.store.get(run['id'])
         body = f"Kira SDLC run `{run['id']}`\n\nSpecification: `{run['data']['spec_hash']}`\n\n" + spec['summary']
         if run['data'].get('issue'):
-            body += f"\n\nRefs #{run['data']['issue']} (closure requires production verification)"
+            body += (f"\n\nCloses #{run['data']['issue']}."
+                     '\n\nMerge completes the implementation issue; deployment and production verification remain separate.')
         body += '\n\nDeterministic checks and an independent proposal review passed. Human review and merge are still required.'
         pr = self.runtime.publish(run['project'], project, run['id'], workspace, run['title'], body)
         self.store.finish(job, 'awaiting_review', {'pr': pr, 'head_sha': pr['head_sha']}, ('review_ready', pr))
         if pr.get('merged_sha'):
             self.merged(run['id'], pr['merged_sha'])
+
+    def sync_issue(self, run):
+        project = self.config['projects'][run['project']]
+        number = run['data'].get('issue')
+        if not project['publish'] or not number:
+            return
+        root = f'/repos/{run["project"]}/issues/{number}'
+        issue = self.runtime.github('GET', root)
+        # A closed, cancelled run is terminal; preserve an operator's resolution metadata.
+        if run['state'] == 'cancelled' and issue['state'] == 'closed':
+            return
+        desired = STATE_LABELS[run['state']]
+        present = {label['name'] for label in issue.get('labels', [])}
+        if desired not in present:
+            # GitHub creates a missing label. Provisioning may predefine its color.
+            self.runtime.github('POST', root + '/labels', {'labels': [desired]})
+        for previous in sorted((present & set(STATE_LABELS.values())) - {desired}):
+            self.runtime.github('DELETE', root + '/labels/' + previous)
+
 
     def publish_plan(self, run_id):
         run = self.store.get(run_id)
@@ -310,6 +337,11 @@ class Engine:
         controls = int(not approved_by and run['state'] in {'planning', 'awaiting_approval'})
         if body.count(APPROVAL_UNCHECKED) != controls or APPROVAL_CHECKED in body:
             raise AdapterError('Plan rendering contains ambiguous approval controls')
+        pr = run['data'].get('pr') or {}
+        if pr.get('number'):
+            body += (f'\n\n### Pull request\n\n[#{pr["number"]}]'
+                     f'(https://github.com/{run["project"]}/pull/{pr["number"]})'
+                     '\n\nMerge completes implementation, not production verification.')
         body += '\n\n' + tag
         metadata = run['data'].get('plan_comment')
         endpoint = f'/repos/{run["project"]}/issues'
@@ -339,6 +371,7 @@ class Engine:
         else:
             comment = self.runtime.github('POST', f'{endpoint}/{number}/comments', {'body': body})
         self.store.record_plan_comment(run, comment['id'], body)
+        self.sync_issue(run)
 
     def plan_interaction(self, name, payload):
         comment = payload.get('comment', {})
@@ -437,6 +470,7 @@ class Engine:
         if not SHA.fullmatch(sha):
             raise Conflict('A full merge SHA is required')
         if run['state'] == 'awaiting_deployment' and run['data'].get('merge_sha') == sha:
+            self.publish_plan(run_id)
             return
         if project['publish']:
             number = (run['data'].get('pr') or {}).get('number')
@@ -495,12 +529,6 @@ class Engine:
         results = self.runtime.production(project, deployment)
         passed = bool(results) and all(r.get('passed') and not r.get('inconclusive') for r in results)
         self.comment(run, f'verification-{job["id"]}', '## Deployment verification\n\n' + json.dumps(results, indent=2))
-        if project['publish'] and run['data'].get('issue'):
-            # Only operate on issues created by the configured bot, never labels as ownership proof.
-            issue = self.runtime.github('GET', f'/repos/{run["project"]}/issues/{run["data"]["issue"]}')
-            if issue['user']['login'] == project['bot_login']:
-                self.runtime.github('PATCH', f'/repos/{run["project"]}/issues/{issue["number"]}',
-                                    {'state': 'closed' if passed else 'open'})
         self.store.finish(job, 'verified' if passed else 'needs_human', {'production_evidence': results},
                           ('production_verified' if passed else 'production_inconclusive_or_failed', {'results': results}))
 
@@ -603,8 +631,9 @@ class Engine:
             if len(kinds) > 1:
                 raise Conflict('Issue has conflicting lifecycle kind labels')
             kind = next(iter(kinds), 'incident' if 'auto-triaged' in labels else 'feature')
-            self.submit(name, kind, live['title'], live.get('body') or 'Clarify this issue before proposing implementation.',
-                        f'{name}:issue:{issue["number"]}', {'issue': issue['number']})
+            run = self.submit(name, kind, live['title'], live.get('body') or 'Clarify this issue before proposing implementation.',
+                              f'{name}:issue:{issue["number"]}', {'issue': issue['number']})
+            self.sync_issue(run)
         elif kind == 'issue_comment':
             if payload.get('action') == 'created':
                 self.github_command(name, payload)
@@ -703,6 +732,7 @@ class Engine:
                 self.handle_event(job['payload'])
                 self.store.finish(job)
             else:
+                self.sync_issue(self.store.get(job['run_id']))
                 if self.store.get(job['run_id'])['state'] == 'cancelled':
                     self.store.finish(job)
                 elif job['action'] == 'plan':
