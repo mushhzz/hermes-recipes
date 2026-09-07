@@ -1,0 +1,18 @@
+{
+  "repository": "mushhzz/hermes-recipes",
+  "webhook_url": null,
+  "ruleset_name": "hermes-sdlc-main",
+  "enforcement": "disabled",
+  "required_workflows": ["Lifecycle verification"],
+  "required_check_contexts": ["regression (3.11)", "regression (3.12)", "regression (3.13)"],
+  "labels": [
+    {"name": "ready-to-fix", "color": "0e8a16", "description": "Human handoff to lifecycle planning; not implementation approval"},
+    {"name": "auto-triaged", "color": "5319e7", "description": "Agent-investigated issue requiring deliberate human handoff"},
+    {"name": "ci-flaky", "color": "fbca04", "description": "Suspected flaky CI or infrastructure failure"},
+    {"name": "feature", "color": "a2eeef", "description": "Lifecycle feature work"},
+    {"name": "bug", "color": "d73a4a", "description": "Something is not working"},
+    {"name": "incident", "color": "b60205", "description": "Lifecycle incident remediation"},
+    {"name": "maintenance", "color": "006b75", "description": "Lifecycle maintenance work"},
+    {"name": "migration", "color": "1d76db", "description": "Lifecycle migration work"}
+  ]
+}

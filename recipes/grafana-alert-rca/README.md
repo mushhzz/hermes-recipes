@@ -127,7 +127,7 @@ remove it. Confirm you see the chat announcement and, eventually, an issue or co
 
 ## Anti-loop note
 
-If you also run `../github-issue-triage`, `configure-route.py` here automatically adds a
-filter to that route so it skips issues labelled `auto-triaged` — otherwise an RCA-generated
-issue would immediately get "fixed" by the other route, which is not what you want for a
-report that's meant for a human to read and decide on.
+The durable SDLC receiver ignores new issues labelled `auto-triaged`. A configured human
+may apply `ready-to-fix` to start planning, then separately approve the specification hash.
+This installer no longer mutates another recipe's filters, so installation order cannot
+disable the deliberate handoff. See [lifecycle operations](../../docs/ai-sdlc/operations.md).

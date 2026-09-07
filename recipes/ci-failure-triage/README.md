@@ -16,7 +16,7 @@ flowchart TD
     C -->|real regression| E[Cause-titled issue: impact, evidence, root cause, options, fix]
     D --> F[Human decides: merge the CI-config PR, or ignore]
     E --> G[Human reads it, may add ready-to-fix]
-    G -.->|picked up by github-issue-triage| H[Claude Code fix, PR]
+    G -.->|durable SDLC receiver| H[Plan, human spec approval, checked implementation PR]
 ```
 
 ## Prerequisites
@@ -37,7 +37,7 @@ push access (for the CI-config-tuning PR path only), and branch protection requi
    ```
 3. On GitHub: repo Settings → Webhooks → Add webhook. Hermes dispatches by URL path, not by
    inspecting the payload, so this needs its own webhook subscription even if you already run
-   `../github-issue-triage/` or `../grafana-alert-rca/` on the same repo — they each point at a
+   the durable SDLC receiver or `../grafana-alert-rca/` on the same repo — they each point at a
    different path with a different secret.
    - Payload URL: your gateway's public URL + `/webhooks/ci-failure-triage`
    - Content type: `application/json`, Secret: the value from step 1
@@ -51,9 +51,9 @@ push access (for the CI-config-tuning PR path only), and branch protection requi
 CI failures are noisy and frequent compared to production alerts — an agent with write access
 to application code on every red build is a much bigger blast radius than one on the rarer
 event of a firing alert. Keeping this recipe RCA-and-issue-only, and routing "yes, actually fix
-it" through a human adding the `ready-to-fix` label (see `../github-issue-triage/`), means the
-decision to let an agent touch application code always passes through a human first, no matter
-which recipe found the problem.
+it" through a human adding `ready-to-fix` starts a lifecycle plan, not immediate code writes.
+The human must then approve the exact specification hash before implementation.
+See [lifecycle operations](../../docs/ai-sdlc/operations.md).
 
 ## Tuning
 

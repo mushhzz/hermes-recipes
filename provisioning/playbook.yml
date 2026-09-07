@@ -23,6 +23,12 @@
     pnpm_version: "10.0.0"
     uv_version: "0.11.0"
     uv_executable: "/usr/local/bin/uv"
+    sdlc_enabled: false
+    sdlc_project: ""
+    sdlc_source: ""
+    sdlc_approver: ""
+    sdlc_install_root: "/home/{{ ansible_user }}/services/hermes-recipes"
+    sdlc_image: "python:3.12-slim"
 
   tasks:
     - name: Install base development packages
@@ -165,3 +171,101 @@
           find {{ workspace_root }}/repos -maxdepth 1 -type d
           \( -name "rca-*" -o -name "issue-*" \)
           -mmin +1440 -exec rm -rf {} +
+
+    - name: Install the durable software lifecycle
+      when: sdlc_enabled | bool
+      block:
+        - name: Require explicit lifecycle target and approver
+          assert:
+            that:
+              - sdlc_project | length > 0
+              - sdlc_source | length > 0
+              - sdlc_approver | length > 0
+            fail_msg: "Set sdlc_project, sdlc_source and sdlc_approver before enabling SDLC."
+
+        - name: Install Docker for credential-free checks
+          become: true
+          apt:
+            name: docker.io
+            state: present
+
+        - name: Start Docker
+          become: true
+          systemd:
+            name: docker
+            state: started
+            enabled: true
+
+        - name: Permit service account to run check containers
+          become: true
+          user:
+            name: "{{ ansible_user }}"
+            groups: docker
+            append: true
+
+        - name: Create lifecycle installation directory
+          file:
+            path: "{{ sdlc_install_root }}"
+            state: directory
+            mode: "0700"
+
+        - name: Install lifecycle code and operating references
+          copy:
+            src: "{{ playbook_dir }}/../{{ item }}"
+            dest: "{{ sdlc_install_root }}/"
+            mode: preserve
+          loop:
+            - hermes_sdlc
+            - scripts
+            - tests
+            - evaluations
+            - docs
+            - provisioning
+            - README.md
+          register: sdlc_code
+
+        - name: Remove retired lifecycle command modules
+          file:
+            path: "{{ sdlc_install_root }}/hermes_sdlc/{{ item }}"
+            state: absent
+          loop:
+            - cli.py
+            - __main__.py
+
+        - name: Pull trusted sandbox image
+          become: true
+          command:
+            argv: [docker, pull, "{{ sdlc_image }}"]
+          register: sdlc_pull
+          changed_when: "'Downloaded newer image' in sdlc_pull.stdout"
+
+        - name: Create private lifecycle configuration and Hermes skill
+          command:
+            argv:
+              - python3
+              - "{{ sdlc_install_root }}/scripts/install-sdlc.py"
+              - --project
+              - "{{ sdlc_project }}"
+              - --source
+              - "{{ sdlc_source }}"
+              - --approver
+              - "{{ sdlc_approver }}"
+              - --image
+              - "{{ sdlc_image }}"
+          changed_when: false
+
+        - name: Install lifecycle service
+          become: true
+          template:
+            src: hermes-sdlc.service.j2
+            dest: /etc/systemd/system/hermes-sdlc.service
+            mode: "0644"
+          register: sdlc_unit
+
+        - name: Start lifecycle service
+          become: true
+          systemd:
+            name: hermes-sdlc
+            state: "{{ 'restarted' if sdlc_code.changed or sdlc_unit.changed else 'started' }}"
+            enabled: true
+            daemon_reload: true

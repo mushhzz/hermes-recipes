@@ -23,3 +23,7 @@ inventory.ini
 
 # Research scratch (firecrawl-search / firecrawl-scrape output), never published
 .firecrawl/
+
+# Python runtime artifacts
+__pycache__/
+*.py[cod]

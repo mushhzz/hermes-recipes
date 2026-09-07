@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Add/refresh the Grafana alert root-cause-analysis route in Hermes'
-config.yaml, and (if a github-issue-triage route from the sibling recipe
-exists) add the anti-loop filter to it.
+config.yaml. Lifecycle approval routing is owned by hermes_sdlc, not this recipe.
 
 Fill in the placeholders below (GITHUB_REPO, DISCORD_CHANNEL, TERRAFORM_DIR)
 before running, or export them as env vars to override the defaults.
@@ -188,17 +187,6 @@ routes["grafana-error-triage"] = {
     "deliver": "log",
 }
 
-# Anti-loop: issues this route opens carry the auto-triaged label and must
-# not trigger the sibling github-issue-triage route's "fix this issue" flow.
-gh = routes.get("github-issue-triage")
-if gh is not None:
-    filters = gh.setdefault("filters", [])
-    anti_loop = {"not": {"field": "issue.labels", "regex": r'"name": "auto-triaged"'}}
-    if anti_loop not in filters:
-        filters.append(anti_loop)
-        print("github-issue-triage: added auto-triaged anti-loop filter")
-else:
-    print("note: no github-issue-triage route found (fine if you're not using that recipe)")
 
 with open(CONFIG_PATH, "w") as f:
     yaml.dump(config, f, default_flow_style=False, sort_keys=False, width=100)

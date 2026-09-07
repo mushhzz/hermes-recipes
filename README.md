@@ -1,144 +1,74 @@
 # hermes-recipes
 
-Working recipes for running a [Hermes](https://hermes-agent.nousresearch.com) agent gateway
-as unattended, on-call infrastructure: triaging GitHub issues, doing root-cause analysis on
-Grafana alerts, and proposing fixes as reviewable pull requests — instead of paging a human
-at 3am for something an agent can investigate first.
+A durable AI-assisted software-development lifecycle plus operational recipes for [Hermes](https://hermes-agent.nousresearch.com). The lifecycle turns approved intent into a checked branch/PR, handles review revisions, and verifies the deployed revision. Humans approve specifications, review/merge code, and deploy. Agents never merge or deploy autonomously.
 
-This is not a Hermes fork and not a product. It is the configuration, prompts, and glue code
-from a real deployment, genericized into templates you can drop into your own project. Every
-value that was specific to one deployment (repo name, Discord channel, Grafana stack, tunnel
-domain, IPs) has been replaced with a placeholder — see [Setup](#setup).
-
-## How it fits together
+## Lifecycle
 
 ```mermaid
-flowchart TD
-    subgraph Triggers
-        GH[GitHub: issue opened]
-        GF[Grafana: alert firing]
-        CI[GitHub Actions: workflow failed]
-        PRM[GitHub: PR merged]
-        AR[ArgoCD: sync failed / degraded]
-    end
-
-    GH -->|webhook + HMAC| HG[Hermes gateway]
-    GF -->|webhook + HMAC| HG
-    CI -->|webhook + HMAC| HG
-    PRM -->|webhook + HMAC| HG
-    AR -->|webhook + static token| HG
-
-    HG --> IT[github-issue-triage route]
-    HG --> RCA[grafana-alert-rca route]
-    HG --> CIT[ci-failure-triage route]
-    HG --> DR[deployment-failure-rca route]
-    HG --> PV[postmortem-record script, no LLM]
-
-    IT -->|clear fix, or human-applied ready-to-fix| CC[Claude Code delegates the fix]
-    CC --> PR1[Opens a PR]
-    IT -->|ambiguous scope| Q1[Asks a clarifying question in chat]
-
-    RCA --> TRAIL[Shared GitHub issue trail]
-    CIT --> TRAIL
-    DR --> TRAIL
-    TRAIL -->|alert itself is wrong or wasteful| TUNE[Alert-tuning PR, terraform/ only]
-    TRAIL -->|human applies ready-to-fix| IT
-
-    PV --> PEND[(pending.jsonl)]
-    PEND --> SWEEP[hourly cron sweep]
-    SWEEP -->|fix old enough to be deployed| VERIFY[postmortem-verify route]
-    VERIFY -->|re-checks the original evidence| TRAIL
-
-    TRAIL -.->|opens issue, labelled auto-triaged| GH
-    GUARD[Anti-loop filter: auto-triaged label] -.->|blocks Case A/B, not Case C| IT
-
-    PR1 -.->|human review + merge| MAIN[(main branch)]
-    TUNE -.->|human review + CI apply| CFG[(alerting config)]
+flowchart LR
+    I[Issue / feature / maintenance / migration] --> Q[Authenticated durable inbox]
+    Q --> P[Tool-free Hermes plan]
+    P --> A[Human approves specification hash]
+    A --> C[Tool-free code proposal]
+    C --> V[Isolated Docker checks]
+    V --> R[Independent proposal review]
+    R --> PR[Branch / optional bot PR]
+    PR --> H[Human review and merge]
+    PR -->|bounded revision| C
+    H --> D[Deployment SHA + environment]
+    D --> O[Observation window + live evidence]
+    O --> E[Verified outcome / needs human]
 ```
 
-Every route shares the same gateway and the same rules: a dedicated bot identity, a
-path-scoped write boundary, and a human on the merge button. See
-[`docs/security-model.md`](docs/security-model.md) for the reasoning behind each arrow above.
+The controller—not model text—owns approval, write scope, checks, Git, publication, retry limits and durable state. Model calls use the installed Hermes provider pool with zero tools, project context/memory disabled, and plugin discovery disabled in a separate process. Checks execute in credential-free, network-disabled Docker containers on disposable copies. See [security](docs/security-model.md) before activation.
 
-Two loops are worth reading carefully. First, at the bottom: an issue Hermes opens from an RCA
-is itself a GitHub issue, so it fires the exact same `issues` webhook a human-filed one would —
-the `auto-triaged` label and the filter it triggers are the only thing standing between "an
-alert fired" and "an agent starts pushing commits in response to its own report." Second, in
-the middle: a human applying the `ready-to-fix` label is the one deliberate, supervised way
-that same guard gets crossed — see `recipes/github-issue-triage/README.md`'s Case C.
+## What's included
 
-## What's in here
-
-| Path | What it is |
+| Path | Purpose |
 | --- | --- |
-| `recipes/github-issue-triage/` | On a new GitHub issue, delegates a clear fix to Claude Code and opens a PR, or asks a clarifying question and stops. Also handles the `ready-to-fix` human hand-off from the RCA recipes below |
-| `recipes/grafana-alert-rca/` | On a firing Grafana alert, does root-cause analysis (not just "restart the pod") and maintains a GitHub issue trail — plus the Terraform module that manages the alert rules themselves |
-| `recipes/ci-failure-triage/` | On a failed GitHub Actions run, tells a flaky failure from a real regression and maintains the same issue trail; its only write path is a narrowly-scoped PR against your CI config itself |
-| `recipes/deployment-failure-rca/` | On an ArgoCD sync failure or health degradation, works out whether the just-deployed revision caused it, exposed something pre-existing, or is unrelated infra flake |
-| `recipes/postmortem-verification/` | On a merged PR that closes an RCA issue, waits for the deploy window, re-checks the original evidence, and closes the loop with a verified postmortem or a reopened issue |
-| `scripts/` | Read-only Loki query helpers the agent uses to pull logs and stack traces during an investigation |
-| `provisioning/` | An Ansible playbook that provisions a small always-on box (a spare machine, a cheap VPS) with Hermes, Claude Code, and the systemd units to run them |
-| `systemd/` | A unit file for exposing the gateway's webhook port through a stable tunnel (ngrok) if you don't want to open a port on your router |
-| `docs/security-model.md` | The trust model this is built on — read this before running any of it |
-| `docs/lessons-learned.md` | Two real bugs a live run of this exact setup caught in itself, worth knowing before you hit them too |
-| `docs/optional-tools.md` | Where to plug in a dedicated Kubernetes-diagnostics tool instead of extending these recipes to do it worse |
+| `hermes_sdlc/` | Python control plane: SQLite inbox/leases/approvals/evidence, model bridge, sandbox, authenticated background receiver and typed production verification |
+| `scripts/install-sdlc.py` | Installs private local configuration/secrets, Hermes skill and Python service definition; no command launcher |
+| `provisioning/github.json`, `scripts/provision-github.py` | Declarative GitHub labels, webhook, review/check ruleset and Actions token policy; administrator-only plan/apply |
+| `tests/test_lifecycle.py` | Deterministic regression/evaluation scenarios for authorization/state/path/ingress boundaries |
+| `docs/ai-sdlc/` | Full enterprise research, 23-source manifest, historical gap analysis, architecture, operating instructions and executed lifecycle evidence |
+| `recipes/grafana-alert-rca/` | Existing Grafana investigation prompts and Terraform alert examples |
+| `recipes/ci-failure-triage/` | Existing CI investigation and narrowly scoped CI-tuning prompts |
+| `recipes/deployment-failure-rca/` | Existing ArgoCD deployment-failure investigation prompts |
+| `provisioning/` | Optional Linux gateway and lifecycle installation |
 
-## Why this shape, not "just prompts"
+The three RCA recipes are prompt-guided investigations; they do **not** gain the control plane's sandbox/approval guarantees merely by sharing this repository. They create an issue trail. A human's `ready-to-fix` label starts lifecycle planning, not permission to implement. A separate specification approval is required.
 
-An agent that can read your logs, clone your repo, and open pull requests unattended is only
-as safe as its blast radius. Every recipe here follows the same rules:
+## Local setup
 
-- **A dedicated bot GitHub identity**, not your personal token. It can push branches and open
-  PRs; it never merges and never pushes to `main` directly.
-- **Path-scoped write access.** The alert-tuning recipe, for example, is only allowed to touch
-  files under one directory (`terraform/grafana/` in the example); anything else is refused
-  by the prompt and reviewed away in the PR.
-- **A human merges everything.** CI plans and comments; a person approves. The agent's job
-  ends at "here's a reviewable PR", not "here's what I already deployed".
-- **Every clone is unique and disposable.** Two alerts firing at once must not race on the
-  same checkout — see `docs/lessons-learned.md` for what happens when that's not true.
-- **A quiet failure mode.** When the agent isn't confident, it asks a question in chat and
-  stops, rather than guessing on your production repo.
-- **Write scope matches investigation depth.** The two recipes that touch application code
-  (`github-issue-triage`'s Case A/C) require either an unambiguous request or an explicit human
-  label; the three RCA recipes never touch application code at all, only ever a GitHub issue
-  and, in two cases, a narrowly path-scoped PR against their own configuration.
-- **State that outlives one webhook delivery lives in a file, not the agent's head.**
-  `postmortem-verification` doesn't ask an agent to "wait a day" inside a single run — it
-  records intent mechanically (no LLM call) and lets a cron job wake the real investigation
-  once a deploy window has actually elapsed.
+Python 3.11+, installed/authenticated Hermes, GitHub CLI, Git and a working Docker daemon are required. The package itself has no pip dependencies; inference runs with the installed Hermes virtualenv.
 
-None of this makes an unattended agent risk-free. It makes the risk legible and bounded, which
-is the bar to clear before you point one at anything that matters.
+```bash
+docker pull python:3.12-slim
+python3 scripts/install-sdlc.py --project YOUR_ORG/YOUR_REPO --source /absolute/checkout --approver YOUR_GITHUB_LOGIN
+```
 
-## Setup
+The installer defaults to **publication disabled** and the checks/path scope for this recipes repository. Configure the target project's trusted image, exact check commands, path allowlist, bot identity and production checks before using it for another application. It never copies credentials to an agent/check workspace or enables GitHub writes automatically.
 
-1. **Install Hermes** on a small always-on box using `provisioning/playbook.yml` (Ansible), or
-   by hand following the [Hermes docs](https://hermes-agent.nousresearch.com) — the playbook
-   is optional, everything else here just needs a running Hermes gateway.
-2. **Pick a recipe** and read its README. Each one lists the placeholders you need to replace:
-   `<YOUR_ORG>/<YOUR_REPO>`, `<YOUR_DISCORD_CHANNEL>`, `<YOUR_GRAFANA_STACK>`, etc.
-3. **Generate a secret per route**: `openssl rand -hex 32`. Never reuse one secret across
-   routes or share it between the webhook sender's config and anywhere public.
-4. **Wire the webhook sender** (GitHub, Grafana, ArgoCD) to POST to your gateway with that
-   secret. Hermes dispatches by URL path (`/webhooks/<route-name>`), not by inspecting the
-   payload, so each recipe needs its **own** webhook subscription pointed at its own route
-   path — you can have several GitHub webhooks on the same repo side by side, one per recipe,
-   each with its own secret and its own selected events. If your gateway isn't reachable from
-   the internet, `systemd/ngrok-tunnel.service.example` shows one way to expose it through a
-   stable, free-tier domain.
-5. Read `docs/security-model.md` before turning any route loose on a repo you care about.
+GitHub infrastructure is also managed as code. Ask Hermes to provision it from `provisioning/github.json`; the administrator script previews changes by default and applies them with `--apply`. It preserves existing labels and unrelated hooks/rulesets, never prints the webhook secret, and leaves restrictions staged until activation prerequisites exist. See [code-managed GitHub setup](docs/ai-sdlc/operations.md#code-managed-github-setup). This is installation automation, not a replacement lifecycle CLI.
 
-## What you'll need to bring yourself
+Ask Hermes to plan a feature, bug fix, maintenance task or migration: its skill uses built-in terminal `gh issue create/view/comment` and `gh pr view`. GitHub is the shared plan/status/review surface. Humans post `/sdlc approve RUN HASH`, `/sdlc status RUN`, `/sdlc cancel RUN` or `/sdlc recover RUN plan|revise|verify` on the matching issue/PR; Hermes never approves, merges or deploys for them. [Operating instructions](docs/ai-sdlc/operations.md) cover setup, feedback and event contracts.
 
-This repo has no CI, no tests, and isn't meant to be depended on as a library — copy what you
-need and adapt it. You'll need: a Hermes install, a GitHub repo with a bot account that has
-push access, and (for the Grafana and postmortem-verification recipes) a Grafana Cloud stack or
-self-hosted instance with Loki. `postmortem-verification` also needs `flock` (standard on
-Debian/Ubuntu, not on macOS) and an OS cron. `deployment-failure-rca` needs ArgoCD with its
-notifications controller running. Everything is plain YAML/Python/Bash/Terraform; there's
-nothing to `npm install`.
+The SDLC receiver defaults to `127.0.0.1:8645`, separate from the existing Hermes gateway. GitHub sends one authenticated subscription covering the lifecycle events to `/webhooks/github`. Each legacy RCA recipe still uses its own gateway endpoint and secret. Use TLS termination for public exposure; never expose an unauthenticated listener.
+
+The installed background service retains the supervisor name `hermes-sdlc`; this is not an executable. Administrators launch the absolute checkout path `hermes_sdlc/service.py` using system Python, without arguments, through a process manager. There is no user command CLI or package main entrypoint.
+
+## Cutover from the earlier issue/postmortem recipes
+
+The old prompt-to-shell issue fixer and JSONL/cron postmortem installers have been removed. The inspected installed Hermes gateway did not support their assumed `script` dispatch property. Remove their existing gateway routes (`github-issue-triage`, `postmortem-record`, `postmortem-verify`), old webhook subscriptions and verification cron before switching over. Preserve old pending/processed files as audit evidence; HTTP acceptance is not evidence of completed verification. Re-submit unfinished work through the lifecycle after reviewing it. Do not enable both old application-writing routes and the new control plane.
+
+## Verification
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+The [historical pre-cutover lifecycle example](docs/ai-sdlc/lifecycle-example.md) preserves actual model/sandbox/local deployment evidence, not live proof of the new GitHub-only workflow. Maintainers use the Python evaluation library for real-model evaluation; there is no evaluation command. Offline scenarios do not measure model quality. Live publication remains disabled until a dedicated bot, repository policy and integrations are configured.
 
 ## License
 
-MIT, see `LICENSE`. Hermes itself is a separate project — this repo only configures it.
+MIT. Hermes remains a separate project; this repository configures and integrates its installed runtime.

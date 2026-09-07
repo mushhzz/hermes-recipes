@@ -7,8 +7,8 @@ the same GitHub issue trail as recipes/grafana-alert-rca (comment on
 existing work, open a cause-titled issue, or reopen a regression). It never
 opens a fix PR for application code — only, optionally, a narrowly scoped PR
 against the CI configuration itself (.github/workflows/) when the failure
-is CI's own fault. Sharing an issue with a hand fix is done via the
-recipes/github-issue-triage "ready-to-fix" label handoff, not by this route.
+is CI's own fault. Application fixes enter the durable hermes_sdlc lifecycle
+through a human-applied ready-to-fix label and a separately approved specification.
 
 Fill in the placeholders below before running, or export them as env vars.
 
@@ -115,14 +115,16 @@ PHASE 5 - CI CONFIG TUNING (only when CI itself, not the application, is at faul
   by weakening a real test.
     git -C "$RCA_DIR" checkout -b ci-tuning/<short-slug>
     # edit ONLY files under {CI_WORKFLOWS_DIR}/, nothing else
+    git -C "$RCA_DIR" add -- {CI_WORKFLOWS_DIR}/
+    git -C "$RCA_DIR" commit -m "ci: <cause-oriented correction>"
     git -C "$RCA_DIR" push -u origin ci-tuning/<short-slug>
     gh pr create --repo {GITHUB_REPO} --base main --head ci-tuning/<short-slug> \\
       --label auto-triaged --label ci \\
       --title "ci: <what changes and why>" --body-file <tmp file>
   The body must reference the RCA issue (Refs #n) and state how a reviewer verifies it
   (which run to watch). A human reviews and merges; you never merge.
-  If a human later decides this needs an application-code fix rather than a CI-config one,
-  they add the ready-to-fix label to the issue you opened — see recipes/github-issue-triage.
+  If a human decides this needs an application-code fix, they add ready-to-fix to the
+  issue. The durable SDLC receiver drafts a plan; a separate spec-hash approval is required.
 
 PHASE 6 - REPORT
   hermes send --to "discord:{DISCORD_CHANNEL}" "CI RCA for {{workflow_run.name}} (run #{{workflow_run.run_number}}):
