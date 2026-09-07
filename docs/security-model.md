@@ -1,34 +1,83 @@
-# Security model
+# Kira SDLC security model
 
-There are two distinct execution surfaces. Do not treat their guarantees as interchangeable.
+**Model output proposes changes. It never authorizes them.**
 
-## Durable SDLC controller
+[Overview](../README.md) · [Architecture](architecture.md) · [Operations](operations.md)
 
-`hermes_sdlc/` owns lifecycle state and side effects outside the model.
+## Authority boundaries
 
-- **Intake:** a separate receiver validates raw-body HMAC-SHA256, bounded JSON and durable delivery identity before enqueueing. HTTP 202 means accepted, not executed. Bind localhost and use TLS plus upstream request limits for public access.
-- **Approval:** configured human login allowlist plus live GitHub user type and repository write permission. Approval binds a SHA-256 digest of the exact specification (base SHA, files, acceptance, design and rollback). A `ready-to-fix` label only starts planning. Model text cannot approve.
-- **Inference:** a fresh installed-Hermes virtualenv process resolves existing provider credentials, explicitly disables tools, memory, project context, plugin discovery and custom context engines. It rejects external-agent provider modes and checks tool/plugin state before and after generation. Provider diagnostics are suppressed; only structured proposals and allowlisted usage leave the bridge. Internal Hermes APIs are version-sensitive: rerun the live example and evaluations after upgrades.
-- **Writes:** the model returns complete text files, not shell commands. The host rejects traversal, symlinks, protected paths, unapproved files and oversized output before applying changes. The trusted project configuration lives outside the target repo and is never model-editable through the proposal interface.
-- **Checks:** trusted configuration specifies argument arrays. Docker runs without network, credentials, `.git`, capabilities or privilege escalation, as a nonroot user with CPU/memory/PID limits. Input is read-only; writable work and temporary storage are capped tmpfs. No Docker socket is mounted. Use maintained, pinned trusted images; the Docker daemon remains a trusted host capability.
-- **Publication:** disabled by default. Explicit publication requires the authenticated GitHub identity to match the dedicated configured bot. Pushes target only `sdlc/RUN` in the configured GitHub repository, never the acquisition checkout. No force push, merge or deployment command exists in the controller.
-- **Release:** live merged PR must match the verified head SHA, an authorized human merger and successful configured CI workflows. GitHub branch protections are still required to prevent a human/bot bypass outside this controller. Configure `required_ci_checks` with exact workflow names; the controller cannot invent the repository's policy.
-- **Recovery:** merge time is not deployment time. Exact merge SHA, configured environment, actual deployment timestamp, observation period and live configured evidence are required. Missing/old/incomplete telemetry is inconclusive. LLM judgment cannot declare a deployed release successful.
-- **State:** private SQLite WAL database with transactional inbox/jobs/approval/evidence, fenced leases and stable publication identity. Cancellation invalidates queued/running work. Operators stop/start the background service to pause/resume processing; already-started model requests may still incur provider cost. External HTTP/GitHub writes cannot be rolled back by SQLite; reconciliation and stable identifiers handle replay, not a claim of distributed exactly-once execution.
-- **Secrets:** webhook secrets and configuration are private files; provider credentials remain in the existing Hermes installation, never a sandbox mount. The trusted worker account can access its configured integrations. Do not run it as root or with a personal publication token.
+| Boundary | Enforcement |
+| :--- | :--- |
+| Event intake | Host-bound source/project mapping, bounded JSON, HMAC-SHA256 (GitHub/Grafana/deployment) or private static token (ArgoCD), durable delivery identity |
+| Plan approval | Configured human allowlist, live GitHub identity/permission and exact specification hash |
+| File changes | Host-enforced path allowlists, approved scope, size limits and symlink/traversal rejection |
+| Checks | Trusted argument arrays executed in constrained, credential-free Docker containers |
+| Publication | Explicit enablement, verified GitHub App identity and configured repository only |
+| Merge | Human merger, verified PR head and successful required workflows |
+| Verification | Authenticated deployment plus revision-correlated live evidence |
 
-Hermes and GitHub are the user interfaces; there is no local lifecycle CLI. Humans submit approval, status, cancellation and bounded recovery comments on the matching issue/PR. The receiver validates live comment identity, body, resource association and configured authority; a signed delivery alone is not human approval. Hermes may create/read issues and show plans/status using its built-in terminal and `gh`, but must never approve, merge or deploy on a human's behalf. Anyone able to modify private state/config files or run arbitrary code as the worker account already controls the service. Use distinct OS identities where that separation is required. Administrative service launch uses system Python and the absolute `hermes_sdlc/service.py` path, with no arguments.
+A valid webhook signature is not human approval. A task label starts planning, not implementation. A successful check is not permission to merge or deploy.
 
-## Existing RCA recipes
+## Model isolation
 
-Grafana, CI and Argo recipes still run as ordinary Hermes agents with terminal/file tools. Their write restrictions are **prompt instructions plus GitHub permissions and human review**, not the new controller's file/sandbox enforcement. Use a dedicated bot, read-only observability tokens, unique checkouts, and protected branches. Their issue trail feeds the lifecycle through an authorized human handoff.
+The controller starts a fresh process in the installed Hermes virtual environment. It disables tools, memory, project context, plugin discovery and custom context engines; rejects external-agent provider modes; and checks tool/plugin state around generation.
 
-Each gateway recipe has its own secret and webhook subscription. Argo's static-token authentication is distinct from HMAC; use TLS. Do not install application-writing legacy issue/postmortem routes alongside the controller. The obsolete installers were removed; existing deployed routes/cron must be removed during migration.
+Only structured proposals and allowlisted usage information leave the bridge. Provider diagnostics are suppressed. Hermes internals are version-sensitive: run regression checks and representative model evaluations after upgrades.
 
-## Remaining trust and evidence limits
+Issue text, repository content, logs and review comments are untrusted. Even a tool-free model can propose an incorrect patch. Scope enforcement and tests reduce risk; they do not replace human review.
 
-- The host OS, Docker runtime/images, installed Hermes code, provider SDKs and GitHub/observability services are trusted.
-- Repository files, issues, logs and review comments are untrusted. A tool-free model may still propose a bad patch; scope constraints and tests do not prove semantic correctness. Human review and representative model evaluations remain required.
-- HTTP health plus a running SHA proves that configured observation, not all application behavior. Configure functional synthetic checks or error/traffic/SLO evidence appropriate to the risk.
-- Loki queries are operator-owned; configure traffic, running-revision, freshness and interval-coverage queries against real telemetry. An incorrect selector is not fixed by an orchestration framework.
-- No provider diagnostic, secret, or private transcript belongs in research documents or reports. Rotate any credential that appears in a transcript/log/commit, even briefly. The earlier configuration inspection in this implementation session exposed a `model.api_key` value; its value is not retained in project documents and rotation is required.
+Grafana, CI and ArgoCD incidents use this same tool-free proposal path. There is no separate gateway coding or tuning agent. The controller may create an incident issue and collect read-only evidence before approval; it cannot publish an implementation or tuning PR until the normal human-approved specification has passed checks.
+
+## Check isolation
+
+Docker checks run:
+
+- As a nonroot user, without network or credentials
+- Without Git metadata, symlinks or a Docker socket
+- With a read-only input mount and capped writable tmpfs
+- Without capabilities or privilege escalation
+- Under CPU, memory and process limits
+
+Use maintained, digest-pinned images containing the required dependencies. Checks cannot download packages. Docker and the host account controlling its daemon are trusted capabilities; Docker-group membership is effectively host-level authority.
+
+## Credentials
+
+The GitHub App private key and webhook secrets are host-owned private files outside the repository. The key must be accessible only to the service user. App installation tokens stay in memory and are injected only into authenticated Git/`gh` subprocesses—not arguments, remotes, model context or check containers.
+
+Human GitHub access remains separate from the App's identity. The App needs repository contents/issues/pull requests write access and actions/checks/deployments/metadata read access; it must not have administration permission.
+
+Hermes resolves provider credentials from its own installation. Never commit, display or log private keys, tokens, webhook secrets or provider diagnostics. Rotate any credential exposed in a transcript, log or commit.
+
+Incident investigation uses a separate read-only Loki token in a private host file, never the Terraform apply credential. Loki URLs and selectors are operator-owned; payload URLs, namespace values and annotation queries cannot select network destinations or commands. CI evidence is fetched only from the configured repository and live matching run attempt. Allow workflow-file writes and grant GitHub Workflows write permission only for projects explicitly authorized for CI configuration changes.
+
+## Public ingress
+
+Bind the controller to loopback. Place a TLS proxy in front of it with header/body timeouts, request-size and concurrency limits, request buffering and rate limiting. Do not expose the standard-library HTTP server as an unrestricted public TCP listener.
+
+GitHub signatures use `X-Hub-Signature-256` over the exact raw body. A stable `X-GitHub-Delivery` identifies each delivery; duplicates cannot schedule independent work. Deployment integrations use a separate secret and delivery identity.
+
+Grafana source requests use hexadecimal HMAC-SHA256 in `X-Webhook-Signature`, without a timestamp prefix. ArgoCD uses `X-Gitlab-Token`, a static shared secret checked in constant time—not body HMAC. TLS is required; possession of that token permits replay until rotation. Native deliveries are deduplicated by body hash. Stable incident identities coalesce repeated observations without replacing the task or approved specification.
+
+The shared-ingress configuration routes `/kira/` endpoints to Kira and preserves other upstream paths. It disables request inspection and access logging. Host availability remains an operational dependency.
+
+## Human controls
+
+Humans personally post approval, status, cancellation and recovery commands on the matching issue or PR. The controller verifies the live comment author, body, resource association and authority.
+
+Kira may explain a plan or review, but must not approve, merge or deploy for the human. Branch protection is necessary because the controller cannot prevent actions taken outside its own workflow.
+
+## State and recovery
+
+Private SQLite state records jobs, approvals and evidence with transactional claims and fenced leases. Cancellation invalidates completion rights, but cannot undo an external action already accepted by GitHub.
+
+Recovery is an explicitly authorized, bounded attempt—not an erased failure or fabricated success. Back up SQLite through its backup API or with the service stopped; copying only a live database file can omit its WAL.
+
+Anyone able to edit trusted configuration/state or execute arbitrary code as the service account controls the worker. Use separate OS accounts where stronger isolation is required.
+
+## Evidence limits
+
+The host OS, Docker runtime/images, installed Hermes code, provider SDKs and configured external services are trusted.
+
+A merge does not establish deployment. Verification requires the deployed SHA, environment, timestamp, observation period and configured live evidence. Missing telemetry is inconclusive; low error counts without traffic, freshness and coverage are not recovery proof.
+
+HTTP health establishes the configured observation, not every application behavior. Loki selectors and thresholds are operator-owned. Validate them against known-good and known-bad releases before relying on automatic verification.

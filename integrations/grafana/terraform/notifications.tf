@@ -17,10 +17,8 @@ resource "grafana_folder" "alerting" {
   title = "Hermes RCA"
 }
 
-# Payload sent to Hermes. Hermes routes on the top-level "type" field, filters
-# on "status", and renders its triage prompt from the flat fields, so keep the
-# shape stable; the Hermes route prompt (see ../configure-route.py) references
-# these keys.
+# Structured evidence sent to Kira's authenticated Grafana incident source.
+# Resource addresses and template names remain stable configuration interfaces.
 resource "grafana_message_template" "hermes_payload" {
   name     = "hermes-payload"
   template = file("${path.module}/templates/hermes-payload.tmpl")
@@ -36,7 +34,7 @@ resource "grafana_contact_point" "hermes_webhook" {
     url                     = var.hermes_webhook_url
     http_method             = "POST"
     max_alerts              = 5
-    disable_resolve_message = true # Hermes only acts on firing; its route filters status too
+    disable_resolve_message = true # Kira initiates investigation only for firing alerts.
 
     hmac_config {
       secret = var.hermes_route_secret
@@ -52,7 +50,7 @@ resource "grafana_contact_point" "hermes_webhook" {
 }
 
 # The whole policy tree. Root stays on Grafana's default email receiver; two
-# child routes send to Hermes.
+# child routes send incident evidence to Kira.
 resource "grafana_notification_policy" "root" {
   contact_point      = "grafana-default-email"
   group_by           = ["grafana_folder", "alertname"]

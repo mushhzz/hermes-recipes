@@ -1,6 +1,6 @@
 # ArgoCD Notifications config that sends sync-failure and health-degradation
-# events to the Hermes route configured by configure-route.py in this
-# directory. Merge the `data` keys below into your EXISTING
+# events to Kira's authenticated incident receiver.
+# Merge the `data` keys below into your EXISTING
 # argocd-notifications-cm ConfigMap and argocd-notifications-secret Secret
 # (both already exist once the ArgoCD notifications controller is running —
 # do not replace them wholesale, only add/merge these keys, or you will
@@ -24,7 +24,7 @@ metadata:
   name: argocd-notifications-secret
   namespace: argocd
 stringData:
-  hermes-deploy-rca-token: "<the same secret HERMES_ARGOCD_ROUTE_SECRET was set to>"
+  hermes-deploy-rca-token: "<the value in Kira's private ArgoCD source secret file>"
 
 ---
 # --- merge into: kubectl -n argocd get configmap argocd-notifications-cm ---
@@ -36,11 +36,10 @@ metadata:
 data:
   # ArgoCD's webhook service cannot compute an HMAC of its own request body —
   # there is no signing key mixed into the payload, only static or
-  # Secret-sourced header values. See configure-route.py's docstring for why
-  # this recipe deliberately reuses Hermes' GitLab-compatible static-token
-  # comparison (X-Gitlab-Token) rather than pretending this is HMAC-signed.
+  # Secret-sourced header values. Kira verifies X-Gitlab-Token using a
+  # constant-time static-token comparison; this is not body HMAC.
   service.webhook.hermes-deploy-rca: |
-    url: https://<your-tunnel-or-public-domain>/webhooks/argocd-deploy-rca
+    url: https://<your-tunnel-or-public-domain>/kira/webhooks/incidents/argocd
     headers:
     - name: Content-Type
       value: application/json

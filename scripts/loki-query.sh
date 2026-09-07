@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Read-only Loki access for an agent doing log investigation. Uses the
 # Grafana datasource proxy with a Viewer-scoped service-account token — see
-# recipes/grafana-alert-rca/README.md for how to mint one and where the env
-# file (GRAFANA_ENV_FILE, default ~/services/grafana/grafana.env) should live.
+# integrations/grafana/README.md for the read-only token and environment setup.
+# Select the env file with GRAFANA_ENV_FILE (default ~/services/grafana/grafana.env).
 #
 #   loki-query.sh errors [MINUTES] [LIMIT]            recent error records with stack traces
 #   loki-query.sh query '<logql>' [MINUTES] [LIMIT]   raw log lines for any LogQL selector
@@ -39,7 +39,7 @@ range_query() {
 case "$cmd" in
   errors)
     # Adjust this line filter/metadata exclusion to your own known-benign
-    # noise (e.g. expected auth failures) — see the recipe README.
+    # noise (e.g. expected auth failures) — see the Grafana integration guide.
     q="{service_name=\"$LOKI_SERVICE_NAME\"} | detected_level=\"error\""
     range_query "$q" "${1:-30}" "${2:-20}" | python3 "$FORMAT" errors
     ;;

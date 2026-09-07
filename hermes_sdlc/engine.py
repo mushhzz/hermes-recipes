@@ -11,6 +11,7 @@ from pathlib import Path
 from .adapters import Runtime, AdapterError, timestamp
 from .config import safe_path, ConfigurationError
 from .store import Store, Conflict, fingerprint
+from .incidents import normalize
 
 SHA = re.compile(r'^[0-9a-f]{40}$')
 KINDS = {'feature', 'bug', 'incident', 'maintenance', 'migration'}
@@ -58,14 +59,23 @@ class Engine:
         self.store = Store(config['state_dir'])
         self.runtime = runtime or Runtime(config)
 
-    def submit(self, project, kind, title, body, key=None, metadata=None):
+    def submit(self, project, kind, title, body, key=None, metadata=None, *, coalesce=False):
         if project not in self.config['projects'] or kind not in KINDS:
             raise Conflict('Unknown project or work kind')
         if not isinstance(title, str) or not title.strip() or not isinstance(body, str) or not body.strip():
             raise Conflict('A title and explicit task are required')
         if len(title) > 256 or len(body.encode()) > self.config['limits']['max_context_bytes']:
             raise Conflict('Task exceeds input limits')
-        return self.store.create(project, kind, title, body, key, metadata)
+        return self.store.create(project, kind, title, body, key, metadata, coalesce=coalesce)
+
+    def incident(self, project, source, provider, payload):
+        observation = normalize(provider, payload)
+        if observation is None:
+            return
+        key = f'incident:{source}:{observation["identity"]}'
+        self.submit(project, 'incident', observation['title'], observation['body'], key,
+                    {'incident': {**observation, 'source': source, 'observed_at': time.time()}},
+                    coalesce=True)
 
     def authorize(self, project_name, actor):
         project = self.config['projects'][project_name]
@@ -129,11 +139,21 @@ class Engine:
     def plan(self, job):
         run = self.store.get(job['run_id'])
         project = self.config['projects'][run['project']]
+        if run['data'].get('incident'):
+            if project['publish'] and not run['data'].get('issue'):
+                issue = self.runtime.incident_issue(run['project'], project, run)
+                self.store.checkpoint(job, {'issue': issue}, 'incident_issue', {'number': issue})
+                run = self.store.get(run['id'])
         workspace = self.runtime.prepare(project, run['id'])
+        if run['data'].get('incident') and 'incident_evidence' not in run['data']:
+            evidence = self.runtime.incident_evidence(run['project'], project, run['data']['incident'], workspace)
+            self.store.checkpoint(job, {'incident_evidence': evidence}, 'incident_evidence', {'results': evidence})
         base = self.runtime.git(workspace, 'rev-parse', 'HEAD')
         self.store.checkpoint(job, {'workspace': str(workspace), 'base_sha': base}, 'base_pinned', {'sha': base})
         run = self.store.get(run['id'])
         context = self.context(run, workspace)
+        if run['data'].get('incident'):
+            context['incident_evidence'] = run['data'].get('incident_evidence', [])
         context['feedback'] = job['payload'].get('feedback', '')
         spec = self.propose(job, 'plan', context)
         required = ('summary', 'design', 'rollback')
@@ -247,7 +267,7 @@ class Engine:
                 self.comment(self.store.get(run['id']), f'repair-exhausted-{job["id"]}', self.status_text(run['id']))
                 return
         run = self.store.get(run['id'])
-        body = f"Hermes SDLC run `{run['id']}`\n\nSpecification: `{run['data']['spec_hash']}`\n\n" + spec['summary']
+        body = f"Kira SDLC run `{run['id']}`\n\nSpecification: `{run['data']['spec_hash']}`\n\n" + spec['summary']
         if run['data'].get('issue'):
             body += f"\n\nRefs #{run['data']['issue']} (closure requires production verification)"
         body += '\n\nDeterministic checks and an independent proposal review passed. Human review and merge are still required.'
@@ -399,13 +419,22 @@ class Engine:
                 break
         status['production'] = [{key: check.get(key) for key in ('name', 'passed', 'inconclusive', 'observed_sha')}
                                 for check in data.get('production_evidence', [])]
-        return '## Hermes lifecycle status\n\n```json\n' + json.dumps(status, indent=2) + '\n```'
+        return '## Kira lifecycle status\n\n```json\n' + json.dumps(status, indent=2) + '\n```'
 
     def handle_event(self, event):
         provider, kind, payload = event['provider'], event['type'], event['payload']
+        if provider.startswith('incident:'):
+            source_name = provider.removeprefix('incident:')
+            source = self.config.get('incident_sources', {}).get(source_name)
+            if not source:
+                raise Conflict('Incident source is no longer configured')
+            self.incident(source['project'], source_name, source['provider'], payload)
+            return
         if provider == 'deployment':
             self.deployed(payload['run_id'], payload)
             return
+        if provider != 'github':
+            raise Conflict('Unknown event provider')
         name = payload.get('repository', {}).get('full_name')
         if name not in self.config['projects']:
             raise Conflict('Unconfigured repository')
@@ -458,9 +487,9 @@ class Engine:
                                 {'awaiting_review'}, {'revisions': run['data'].get('revisions', 0) + 1})
         elif kind == 'workflow_run' and payload.get('action') == 'completed':
             workflow = payload['workflow_run']
-            if workflow.get('conclusion') != 'failure' or workflow.get('name') not in project['required_ci_checks']:
+            if workflow.get('conclusion') != 'failure':
                 return
-            for run in self.store.list(name):
+            for run in (self.store.list(name) if workflow.get('name') in project['required_ci_checks'] else []):
                 if workflow.get('head_sha') == run['data'].get('head_sha') and run['state'] in {'queued', 'implementing'}:
                     raise Deferred('CI result arrived before publication checkpoint')
                 if run['state'] == 'awaiting_review' and workflow.get('head_sha') == run['data'].get('head_sha'):
@@ -473,6 +502,19 @@ class Engine:
                     self.store.schedule(run['id'], 'revise', {'feedback': {'workflow': live['name'], 'jobs': jobs}},
                                         f'{run["id"]}:ci:{workflow["id"]}:{workflow.get("run_attempt",1)}', {'awaiting_review'},
                                         {'revisions': run['data'].get('revisions', 0) + 1})
+                    return
+            if (workflow.get('name') in project.get('incident_ci_workflows', [])
+                    and not workflow.get('head_branch', '').startswith('sdlc/')):
+                if type(workflow.get('id')) is not int or workflow['id'] < 1:
+                    raise Conflict('Invalid workflow run identity')
+                live = self.runtime.github('GET', f'/repos/{name}/actions/runs/{workflow["id"]}')
+                if (live.get('head_repository', {}).get('full_name') != name
+                        or live.get('head_branch', '').startswith('sdlc/')
+                        or live.get('name') not in project['incident_ci_workflows']
+                        or live.get('run_attempt') != workflow.get('run_attempt')
+                        or live.get('head_sha') != workflow.get('head_sha')):
+                    raise Conflict('CI incident does not match its configured repository and live attempt')
+                self.incident(name, 'github-ci', 'github', live)
         elif kind == 'deployment_status' and payload.get('deployment_status', {}).get('state') == 'success':
             deployment = payload['deployment']
             live = self.runtime.github('GET', f'/repos/{name}/deployments/{deployment["id"]}')

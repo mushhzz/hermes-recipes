@@ -1,10 +1,7 @@
 {{/*
-  Webhook payload sent to the Hermes gateway.
-
-  Hermes routes on the top-level "type" field (its webhook adapter reads
-  payload.type when no X-GitHub-Event header is present), filters on
-  "status", and renders its triage prompt from the flat fields below.
-  Keep this shape stable: the Hermes route prompt references these keys.
+  Structured Grafana evidence for Kira's authenticated incident receiver.
+  The source URL selects the project; payload fields cannot grant authority.
+  Keep alert labels and startsAt stable so repeated observations coalesce.
 */}}
 {{ define "hermes.payload" -}}
 {{ coll.Dict

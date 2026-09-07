@@ -87,13 +87,16 @@ class Store:
         result['data'] = json.loads(result['data'])
         return result
 
-    def create(self, project, kind, title, body, key=None, metadata=None):
+    def create(self, project, kind, title, body, key=None, metadata=None, *, coalesce=False):
         run_id = uuid.uuid4().hex[:20]
         key = f'{project}:{key or run_id}'
         now = time.time()
         with self.transaction() as db:
             previous = db.execute('SELECT * FROM runs WHERE dedup_key=?', (key,)).fetchone()
             if previous:
+                if coalesce and previous['project'] == project and previous['kind'] == kind:
+                    self._evidence(db, previous['id'], 'incident_repeated', {'observation': body})
+                    return self._run(previous)
                 if (previous['project'], previous['kind'], previous['title'], previous['body']) != (project, kind, title, body):
                     raise Conflict('Submission key reused with a different task')
                 return self._run(previous)

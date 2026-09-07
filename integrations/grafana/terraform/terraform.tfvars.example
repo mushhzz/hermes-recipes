@@ -3,13 +3,13 @@
 # GRAFANA_AUTH=glsa_... (a service-account token with Editor or Admin role).
 
 grafana_url            = "https://<your-stack>.grafana.net"
-hermes_webhook_url     = "https://<your-tunnel-or-public-domain>/webhooks/grafana-error-triage"
+hermes_webhook_url     = "https://<your-tunnel-or-public-domain>/kira/webhooks/incidents/grafana"
 loki_datasource_uid    = "<your-loki-datasource-uid>"
 app_service_name       = "<your-backend-service-name>"
 frontend_service_name  = "<your-frontend-service-name>"
 namespace              = "<your-k8s-namespace>"
-runbook_url            = "https://github.com/<your-org>/<your-repo>/blob/main/docs/runbooks/hermes-alert-triage.md"
+runbook_url            = "https://github.com/<your-org>/<your-repo>/blob/main/docs/runbooks/alert-triage.md"
 
-# Shared with the Hermes route (~/.hermes/config.yaml -> routes.grafana-error-triage.secret).
+# Shared with Kira's private incident_sources.grafana.secret_file.
 # Generate with: openssl rand -hex 32
 hermes_route_secret = "REPLACE_ME" # pragma: allowlist secret

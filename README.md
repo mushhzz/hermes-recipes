@@ -1,74 +1,108 @@
-# hermes-recipes
+# Kira SDLC
 
-A durable AI-assisted software-development lifecycle plus operational recipes for [Hermes](https://hermes-agent.nousresearch.com). The lifecycle turns approved intent into a checked branch/PR, handles review revisions, and verifies the deployed revision. Humans approve specifications, review/merge code, and deploy. Agents never merge or deploy autonomously.
+**From a request or production signal to a checked pull request—with humans in control.**
 
-## Lifecycle
+Kira investigates Grafana alerts, CI failures and deployment failures, plans changes, implements approved scope and runs isolated checks. You approve the plan, review the code and decide when to merge and deploy.
 
-```mermaid
-flowchart LR
-    I[Issue / feature / maintenance / migration] --> Q[Authenticated durable inbox]
-    Q --> P[Tool-free Hermes plan]
-    P --> A[Human approves specification hash]
-    A --> C[Tool-free code proposal]
-    C --> V[Isolated Docker checks]
-    V --> R[Independent proposal review]
-    R --> PR[Branch / optional bot PR]
-    PR --> H[Human review and merge]
-    PR -->|bounded revision| C
-    H --> D[Deployment SHA + environment]
-    D --> O[Observation window + live evidence]
-    O --> E[Verified outcome / needs human]
+[Get started](#get-started) · [Operations](docs/operations.md) · [Architecture](docs/architecture.md) · [Security](docs/security-model.md)
+
+## How it works
+
+| Step | Kira | You |
+| :--- | :--- | :--- |
+| **1 · Investigate** | Reads the issue or incident, gathers configured evidence and pins a source revision. | Describe the outcome or configure trusted signal sources. |
+| **2 · Plan** | Publishes scope, acceptance criteria and a proposed approach. | Review and approve the exact plan. |
+| **3 · Build** | Applies scoped changes, runs Docker checks and performs an independent model review. | Clarify requirements when needed. |
+| **4 · Review** | Opens a PR and handles authorized revision requests. | Review the diff and merge when checks pass. |
+| **5 · Verify** | Evaluates configured evidence for the deployed revision. | Deploy through your existing release process. |
+
+> **A plan is not permission to implement. A merge is not proof of deployment.**
+> Kira never approves its own work, merges a PR or deploys on your behalf.
+
+## Connected workflows
+
+| Input | What Kira does |
+| :--- | :--- |
+| [Grafana alerts](integrations/grafana/README.md) | Investigates Loki evidence and source code; proposes a fix or justified Terraform alert tuning |
+| [CI failures](integrations/ci/README.md) | Reads failed jobs and logs; distinguishes application regressions from CI configuration problems |
+| [Deployment failures](integrations/deployments/README.md) | Investigates ArgoCD sync/health failures; proposes remediation without touching the live cluster |
+| GitHub issues | Plans features, bugs, maintenance and migrations |
+
+**One controller, one approval gate.** Integrations collect signals; they do not run separate coding agents or open tuning PRs. Alert rules, workflow files and application code all require an approved plan, scoped checks and human PR review.
+
+## Work with Kira
+
+### Open an issue
+
+Describe what should change, what must stay unchanged and how you will judge success. Use one task-type label: `feature`, `bug`, `maintenance`, `migration` or `incident`.
+
+### Review the plan
+
+Kira posts a readable plan with an acceptance checklist and an exact approval command. After reviewing it, post that command yourself:
+
+```text
+/sdlc approve RUN HASH
 ```
 
-The controller—not model text—owns approval, write scope, checks, Git, publication, retry limits and durable state. Model calls use the installed Hermes provider pool with zero tools, project context/memory disabled, and plugin discovery disabled in a separate process. Checks execute in credential-free, network-disabled Docker containers on disposable copies. See [security](docs/security-model.md) before activation.
+Implementation starts only after the controller verifies your identity, repository permission and specification hash.
 
-## What's included
+### Review the pull request
 
-| Path | Purpose |
-| --- | --- |
-| `hermes_sdlc/` | Python control plane: SQLite inbox/leases/approvals/evidence, model bridge, sandbox, authenticated background receiver and typed production verification |
-| `scripts/install-sdlc.py` | Installs private local configuration/secrets, Hermes skill and Python service definition; no command launcher |
-| `provisioning/github.json`, `scripts/provision-github.py` | Declarative GitHub labels, webhook, review/check ruleset and Actions token policy; administrator-only plan/apply |
-| `tests/test_lifecycle.py` | Deterministic regression/evaluation scenarios for authorization/state/path/ingress boundaries |
-| `docs/ai-sdlc/` | Full enterprise research, 23-source manifest, historical gap analysis, architecture, operating instructions and executed lifecycle evidence |
-| `recipes/grafana-alert-rca/` | Existing Grafana investigation prompts and Terraform alert examples |
-| `recipes/ci-failure-triage/` | Existing CI investigation and narrowly scoped CI-tuning prompts |
-| `recipes/deployment-failure-rca/` | Existing ArgoCD deployment-failure investigation prompts |
-| `provisioning/` | Optional Linux gateway and lifecycle installation |
+Inspect the diff and CI results. Request changes through GitHub reviews; merge only when you are satisfied. Status, cancellation and recovery commands are documented in [Operations](docs/operations.md#github-controls).
 
-The three RCA recipes are prompt-guided investigations; they do **not** gain the control plane's sandbox/approval guarantees merely by sharing this repository. They create an issue trail. A human's `ready-to-fix` label starts lifecycle planning, not permission to implement. A separate specification approval is required.
+## Get started
 
-## Local setup
-
-Python 3.11+, installed/authenticated Hermes, GitHub CLI, Git and a working Docker daemon are required. The package itself has no pip dependencies; inference runs with the installed Hermes virtualenv.
+Run the installer **on your always-on service host**, with Python 3.11+, an installed and authenticated [Hermes runtime](https://hermes-agent.nousresearch.com), Git, GitHub CLI, OpenSSL and Docker. The included [Linux playbook](provisioning/playbook.yml) can provision that host from your workstation.
 
 ```bash
 docker pull python:3.12-slim
-python3 scripts/install-sdlc.py --project YOUR_ORG/YOUR_REPO --source /absolute/checkout --approver YOUR_GITHUB_LOGIN
+python3 scripts/install-sdlc.py \
+  --project OWNER/REPO \
+  --source /absolute/path/to/checkout \
+  --approver YOUR_GITHUB_LOGIN
 ```
 
-The installer defaults to **publication disabled** and the checks/path scope for this recipes repository. Configure the target project's trusted image, exact check commands, path allowlist, bot identity and production checks before using it for another application. It never copies credentials to an agent/check workspace or enables GitHub writes automatically.
+The installer creates private configuration, a Hermes skill and a service definition. **New installations cannot publish until you explicitly configure and enable them.**
 
-GitHub infrastructure is also managed as code. Ask Hermes to provision it from `provisioning/github.json`; the administrator script previews changes by default and applies them with `--apply`. It preserves existing labels and unrelated hooks/rulesets, never prints the webhook secret, and leaves restrictions staged until activation prerequisites exist. See [code-managed GitHub setup](docs/ai-sdlc/operations.md#code-managed-github-setup). This is installation automation, not a replacement lifecycle CLI.
+Complete the [setup guide](docs/operations.md#installation): install a repository-scoped GitHub App, configure trusted checks and approvers, connect signed webhooks, and enable required CI and branch protection.
 
-Ask Hermes to plan a feature, bug fix, maintenance task or migration: its skill uses built-in terminal `gh issue create/view/comment` and `gh pr view`. GitHub is the shared plan/status/review surface. Humans post `/sdlc approve RUN HASH`, `/sdlc status RUN`, `/sdlc cancel RUN` or `/sdlc recover RUN plan|revise|verify` on the matching issue/PR; Hermes never approves, merges or deploys for them. [Operating instructions](docs/ai-sdlc/operations.md) cover setup, feedback and event contracts.
+## Safety by design
 
-The SDLC receiver defaults to `127.0.0.1:8645`, separate from the existing Hermes gateway. GitHub sends one authenticated subscription covering the lifecycle events to `/webhooks/github`. Each legacy RCA recipe still uses its own gateway endpoint and secret. Use TLS termination for public exposure; never expose an unauthenticated listener.
+- **Explicit authority.** Approval is bound to the exact plan and checked against live GitHub permissions.
+- **Tool-free proposals.** Hermes returns structured changes; the controller owns file writes and GitHub actions.
+- **Isolated checks.** Repository checks run without credentials or network access in constrained Docker containers.
+- **Durable state.** SQLite records jobs, approvals and evidence; retries are bounded.
+- **Evidence-based outcomes.** Missing deployment or production evidence never becomes a success result.
 
-The installed background service retains the supervisor name `hermes-sdlc`; this is not an executable. Administrators launch the absolute checkout path `hermes_sdlc/service.py` using system Python, without arguments, through a process manager. There is no user command CLI or package main entrypoint.
+See the [security model](docs/security-model.md) for trust assumptions and limits.
 
-## Cutover from the earlier issue/postmortem recipes
+## Deployment
 
-The old prompt-to-shell issue fixer and JSONL/cron postmortem installers have been removed. The inspected installed Hermes gateway did not support their assumed `script` dispatch property. Remove their existing gateway routes (`github-issue-triage`, `postmortem-record`, `postmortem-verify`), old webhook subscriptions and verification cron before switching over. Preserve old pending/processed files as audit evidence; HTTP acceptance is not evidence of completed verification. Re-submit unfinished work through the lifecycle after reviewing it. Do not enable both old application-writing routes and the new control plane.
+Kira runs as a background service. GitHub is its planning, approval and review interface.
 
-## Verification
+Kira runs on the **always-on Surface server** as the `hermes-sdlc` systemd service, alongside its public ingress. Nginx connects directly to the loopback controller; no Mac session or reverse SSH tunnel is required.
+
+The installation uses the **Kira SDLC GitHub App** (`kira-sdlc[bot]`), signed webhooks, durable SQLite state and required CI. Linux service and ingress provisioning are included under `provisioning/`; see [deployment details](docs/operations.md#deployment).
+
+## Develop
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-The [historical pre-cutover lifecycle example](docs/ai-sdlc/lifecycle-example.md) preserves actual model/sandbox/local deployment evidence, not live proof of the GitHub-only workflow. Maintainers use the Python evaluation library for real-model evaluation; there is no evaluation command. Offline scenarios do not measure model quality. Kira's App authentication, public webhook delivery, remote CI and publication configuration are installed; see [current activation evidence and operating limits](docs/ai-sdlc/operations.md#applied-repository-evidence). Human plan approval and PR merge remain mandatory.
+GitHub Actions runs the checks on Python **3.11, 3.12 and 3.13**. The repository also includes a small example service and labeled model-evaluation scenarios.
+
+| Directory | Purpose |
+| :--- | :--- |
+| `hermes_sdlc/` | Controller, GitHub App authentication, durable state and runtime adapters |
+| `integrations/` | Grafana Terraform, ArgoCD notifications and native incident setup |
+| `scripts/` | Installation and GitHub provisioning |
+| `provisioning/` | Linux service and shared-ingress deployment |
+| `tests/` | Authorization, lifecycle, recovery and provisioning checks |
+| `evaluations/` | Model-evaluation scenarios |
+| `examples/` | Release-readiness example service |
+| `docs/` | Operations, architecture and security |
 
 ## License
 
-MIT. Hermes remains a separate project; this repository configures and integrates its installed runtime.
+[MIT](LICENSE). Hermes is a separate runtime dependency.

@@ -28,14 +28,22 @@ http {
             limit_req zone=kira_rate burst=30 nodelay;
             limit_req_status 429;
             limit_conn kira_connections 32;
-            proxy_pass http://127.0.0.1:{{ controller_forward_port }}/webhooks/github;
+            proxy_pass http://127.0.0.1:{{ controller_port }}/webhooks/github;
+        }
+        location /kira/webhooks/incidents/ {
+            limit_except POST { deny all; }
+            client_max_body_size 1m;
+            limit_req zone=kira_rate burst=30 nodelay;
+            limit_req_status 429;
+            limit_conn kira_connections 32;
+            proxy_pass http://127.0.0.1:{{ controller_port }}/webhooks/incidents/;
         }
         location = /kira/health {
             limit_except GET { deny all; }
             limit_req zone=kira_rate burst=30 nodelay;
             limit_req_status 429;
             limit_conn kira_connections 32;
-            proxy_pass http://127.0.0.1:{{ controller_forward_port }}/health;
+            proxy_pass http://127.0.0.1:{{ controller_port }}/health;
         }
         location / {
             proxy_pass http://127.0.0.1:{{ existing_gateway_port }};

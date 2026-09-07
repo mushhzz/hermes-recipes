@@ -1,12 +1,12 @@
 ---
-# The existing ngrok domain and gateway remain in place. A /kira/ prefix routes
-# over a separately supervised SSH reverse forward to the controller host.
-- name: Share stable ngrok ingress without replacing existing webhook routes
+# The controller and shared public ingress run on the same always-on host.
+# Other webhook routes keep their existing gateway upstream.
+- name: Route shared ingress to the local Kira controller
   hosts: gateway
   become: true
   vars:
     proxy_port: 18644
-    controller_forward_port: 18645
+    controller_port: 8645
     existing_gateway_port: 8644
     nginx_image: nginx@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c
     ngrok_executable: /usr/local/bin/ngrok
@@ -25,9 +25,9 @@
         return_content: true
       register: original_gateway
 
-    - name: Check private controller forward before changing ingress
+    - name: Check local controller before changing ingress
       uri:
-        url: "http://127.0.0.1:{{ controller_forward_port }}/health"
+        url: "http://127.0.0.1:{{ controller_port }}/health"
         return_content: true
       register: controller_health
       failed_when: controller_health.json.service | default('') != 'hermes-sdlc'

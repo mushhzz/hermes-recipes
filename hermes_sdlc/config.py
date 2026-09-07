@@ -5,6 +5,7 @@ import json
 import os
 import re
 from pathlib import Path, PurePosixPath
+from urllib.parse import urlsplit
 
 DEFAULT_CONFIG = Path.home() / '.hermes/sdlc/config.json'
 LIMITS = dict(model_timeout_seconds=180, check_timeout_seconds=300, max_attempts=2,
@@ -82,6 +83,26 @@ def load(path: str | Path = DEFAULT_CONFIG) -> dict:
         project.setdefault('approvers', [])
         project.setdefault('required_ci_checks', [])
         project.setdefault('production_checks', [])
+        workflows = project.setdefault('incident_ci_workflows', [])
+        if not isinstance(workflows, list) or any(not isinstance(w, str) or not w.strip() for w in workflows):
+            raise ConfigurationError('incident_ci_workflows must contain explicit workflow names')
+        loki = project.get('incident_loki')
+        if loki is not None:
+            if not isinstance(loki, dict):
+                raise ConfigurationError('incident_loki must be an object')
+            url = urlsplit(loki.get('url', ''))
+            if url.scheme not in {'https', 'http'} or not url.hostname or url.username or url.password or url.query or url.fragment:
+                raise ConfigurationError('Incident Loki needs a trusted base URL without credentials or query')
+            if not isinstance(loki.get('queries'), list) or not 1 <= len(loki['queries']) <= 5 or any(not isinstance(q, str) or not q.strip() for q in loki['queries']):
+                raise ConfigurationError('Incident Loki needs one to five host-owned LogQL queries')
+            token_file = Path(loki.get('token_file', '')).expanduser()
+            if not token_file.is_file() or token_file.stat().st_mode & 0o077:
+                raise ConfigurationError('Incident Loki token must be a private host file')
+            loki['token_file'] = str(token_file.resolve())
+            for field, default, maximum in (('window_seconds', 7200, 86400), ('limit', 100, 1000)):
+                value = loki.setdefault(field, default)
+                if type(value) is not int or not 1 <= value <= maximum:
+                    raise ConfigurationError(f'Invalid incident Loki {field}')
         project.setdefault('environment', 'production')
         project.setdefault('observation_seconds', 3600)
         if not isinstance(project['observation_seconds'], int) or project['observation_seconds'] < 0:
@@ -114,8 +135,25 @@ def load(path: str | Path = DEFAULT_CONFIG) -> dict:
             raise ConfigurationError('State and trusted configuration must live outside the target checkout')
         if not source.startswith('https://') and path.is_relative_to(project['source']):
             raise ConfigurationError('Trusted config must live outside the target checkout')
+        if loki and not source.startswith('https://') and Path(loki['token_file']).is_relative_to(project['source']):
+            raise ConfigurationError('Incident Loki token must live outside the target checkout')
         if app and not source.startswith('https://') and Path(app['private_key_file']).is_relative_to(project['source']):
             raise ConfigurationError('GitHub App private key must live outside the target checkout')
+    sources = config.setdefault('incident_sources', {})
+    if not isinstance(sources, dict):
+        raise ConfigurationError('incident_sources must be a host-owned map')
+    for name, source in sources.items():
+        if not re.fullmatch(r'[A-Za-z0-9_-]+', name) or not isinstance(source, dict):
+            raise ConfigurationError('Invalid incident source')
+        if source.get('provider') not in {'grafana', 'argocd'} or source.get('project') not in config['projects']:
+            raise ConfigurationError('Incident source must bind a supported provider to a configured project')
+        secret = Path(source.get('secret_file', '')).expanduser()
+        if not secret.is_file() or secret.stat().st_mode & 0o077 or len(secret.read_bytes().strip()) < 32:
+            raise ConfigurationError('Incident source needs a private webhook secret file')
+        source['secret_file'] = str(secret.resolve())
+        checkout = config['projects'][source['project']]['source']
+        if not checkout.startswith('https://') and secret.resolve().is_relative_to(Path(checkout)):
+            raise ConfigurationError('Incident webhook secret must live outside the target checkout')
     return config
 
 

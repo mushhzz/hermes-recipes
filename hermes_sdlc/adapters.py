@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -107,9 +108,9 @@ class Runtime:
 
     def git(self, workspace, *args):
         env = {**os.environ, 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull,
-               'GIT_TERMINAL_PROMPT': '0', 'GIT_AUTHOR_NAME': 'Hermes SDLC',
-               'GIT_AUTHOR_EMAIL': 'hermes-sdlc@localhost', 'GIT_COMMITTER_NAME': 'Hermes SDLC',
-               'GIT_COMMITTER_EMAIL': 'hermes-sdlc@localhost'}
+               'GIT_TERMINAL_PROMPT': '0', 'GIT_AUTHOR_NAME': 'Kira SDLC',
+               'GIT_AUTHOR_EMAIL': 'kira-sdlc@localhost', 'GIT_COMMITTER_NAME': 'Kira SDLC',
+               'GIT_COMMITTER_EMAIL': 'kira-sdlc@localhost'}
         network = any(arg in {'clone', 'fetch', 'push', 'ls-remote'} for arg in args)
         credentials = ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential'] if network else []
         if self.app and network:
@@ -219,6 +220,81 @@ class Runtime:
         if existing:
             self.git(workspace, 'push', f'https://github.com/{project_name}.git', f'HEAD:refs/heads/{branch}')
         return {'number': pr['number'], 'url': pr['html_url'], 'head_sha': head}
+
+    def incident_issue(self, name, project, run):
+        """Recover a Kira-owned issue after a crash before the local checkpoint."""
+        if self.identity() != project['bot_login']:
+            raise AdapterError('Wrong identity for publishing incident evidence')
+        marker = f'<!-- kira-incident:{run["id"]} -->'
+        query = urllib.parse.urlencode({'state': 'all', 'creator': project['bot_login'], 'per_page': 100})
+        for page in range(1, 11):
+            issues = self.github('GET', f'/repos/{name}/issues?{query}&page={page}')
+            for issue in issues:
+                if (not issue.get('pull_request') and issue.get('user', {}).get('login') == project['bot_login']
+                        and (issue.get('body') or '').rstrip().endswith(marker)):
+                    return issue['number']
+            if len(issues) < 100:
+                break
+        else:
+            raise AdapterError('Incident issue reconciliation exceeded its bounded history; human intervention required')
+        issue = self.github('POST', f'/repos/{name}/issues', {
+            'title': run['title'],
+            'body': '## Kira incident\n\nInvestigation and planning only. No changes are authorized until a human '
+                    'approves the exact plan posted below.\n\n' + run['body'][:50000] + '\n\n' + marker})
+        return issue['number']
+
+    def incident_evidence(self, name, project, incident, workspace=None):
+        """Collect bounded facts with host-owned read-only requests, never agent tools."""
+        results = []
+        budget = self.config['limits']['max_context_bytes'] // 3
+        revision = incident['payload'].get('head_sha' if incident['provider'] == 'github' else 'revision')
+        if workspace is not None and incident['provider'] in {'github', 'argocd'}:
+            record = {'source': 'git-revision', 'available': False, 'revision': revision}
+            try:
+                if not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{40}', revision):
+                    raise AdapterError('Incident revision is not a full Git SHA')
+                text = self.git(workspace, 'show', '--format=fuller', '--no-ext-diff', '--no-textconv', revision, '--')
+                record.update(available=True, text=text[:budget], truncated=len(text) > budget)
+            except Exception as exc:
+                record['reason'] = type(exc).__name__
+            results.append(record)
+        if incident['provider'] == 'github':
+            workflow = incident['payload']
+            # IDs were validated on intake; repository and credentials come only from the host.
+            run_id, attempt = workflow['id'], workflow['run_attempt']
+            try:
+                jobs = self.github('GET', f'/repos/{name}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100')
+                env = self.app.environment(os.environ) if self.app else None
+                _, logs, _ = self.command(['gh', 'run', 'view', str(run_id), '--repo', name,
+                                           '--attempt', str(attempt), '--log-failed'], env=env)
+                text = json.dumps({'jobs': jobs, 'failed_logs': logs})
+                results.append({'source': 'github-actions', 'available': True,
+                                'text': text[:budget], 'truncated': len(text) > budget})
+            except Exception as exc:
+                results.append({'source': 'github-actions', 'available': False, 'reason': type(exc).__name__})
+        loki = project.get('incident_loki')
+        if loki and incident['provider'] in {'grafana', 'argocd'}:
+            end = incident['observed_at']
+            allowance = budget // len(loki['queries'])
+            for query in loki['queries']:
+                record = {'source': 'loki', 'query': query, 'available': False,
+                          'start': end - loki['window_seconds'], 'end': end}
+                try:
+                    token = Path(loki['token_file']).read_text().strip()
+                    params = urllib.parse.urlencode({'query': query, 'start': int(record['start'] * 1e9),
+                                                     'end': int(end * 1e9), 'limit': loki['limit'], 'direction': 'backward'})
+                    _, text = self._http(loki['url'].rstrip('/') + '/loki/api/v1/query_range?' + params,
+                                         headers={'Authorization': 'Bearer ' + token})
+                    data = json.loads(text)
+                    if data.get('status') != 'success' or data.get('data', {}).get('resultType') != 'streams':
+                        raise AdapterError('Loki did not return log streams')
+                    record.update(available=True, text=text[:allowance], truncated=len(text) > allowance)
+                except Exception as exc:
+                    record['reason'] = type(exc).__name__
+                results.append(record)
+        if not results:
+            results.append({'source': 'observability', 'available': False, 'reason': 'No incident log source configured'})
+        return results
 
     def _http(self, url, *, headers=None):
         request = urllib.request.Request(url, headers=headers or {})

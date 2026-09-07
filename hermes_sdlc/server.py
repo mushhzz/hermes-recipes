@@ -34,6 +34,10 @@ def handler(engine):
 
         def do_POST(self):
             provider = {'/webhooks/github': 'github', '/webhooks/deployment': 'deployment'}.get(self.path)
+            source_name = self.path.removeprefix('/webhooks/incidents/') if self.path.startswith('/webhooks/incidents/') else None
+            source = engine.config.get('incident_sources', {}).get(source_name)
+            if source:
+                provider = 'incident:' + source_name
             if not provider:
                 self.reply(404, {'error': 'not found'})
                 return
@@ -47,7 +51,7 @@ def handler(engine):
                 if len(body) != length:
                     self.reply(400, {'error': 'incomplete request'})
                     return
-                secret_file = engine.config['webhook_secrets'].get(provider)
+                secret_file = source['secret_file'] if source else engine.config['webhook_secrets'].get(provider)
                 if not secret_file:
                     self.reply(503, {'error': 'route not configured'})
                     return
@@ -55,20 +59,26 @@ def handler(engine):
                 if len(secret) < 32:
                     self.reply(503, {'error': 'route secret invalid'})
                     return
-                prefix = 'sha256=' if provider == 'github' else ''
-                supplied = self.headers.get('X-Hub-Signature-256' if provider == 'github' else 'X-Webhook-Signature', '')
-                expected = prefix + hmac.new(secret, body, hashlib.sha256).hexdigest()
+                if source and source['provider'] == 'argocd':
+                    supplied = self.headers.get('X-Gitlab-Token', '')
+                    expected = secret.decode('utf-8')
+                else:
+                    prefix = 'sha256=' if provider == 'github' else ''
+                    supplied = self.headers.get('X-Hub-Signature-256' if provider == 'github' else 'X-Webhook-Signature', '')
+                    expected = prefix + hmac.new(secret, body, hashlib.sha256).hexdigest()
                 if not hmac.compare_digest(supplied, expected):
                     self.reply(401, {'error': 'invalid signature'})
                     return
                 delivery = self.headers.get('X-GitHub-Delivery' if provider == 'github' else 'X-Request-ID')
+                if source:
+                    delivery = hashlib.sha256(body).hexdigest()
                 if not delivery or len(delivery) > 200:
                     self.reply(400, {'error': 'delivery identity required'})
                     return
                 payload = json.loads(body)
                 if not isinstance(payload, dict):
                     raise ValueError('object required')
-                kind = self.headers.get('X-GitHub-Event', '') if provider == 'github' else 'deployment'
+                kind = 'incident' if source else (self.headers.get('X-GitHub-Event', '') if provider == 'github' else 'deployment')
                 if provider == 'github' and kind not in {'ping','issues','issue_comment','pull_request','pull_request_review','pull_request_review_comment','workflow_run','deployment_status'}:
                     self.reply(400, {'error': 'unsupported event'})
                     return

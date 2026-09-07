@@ -4,12 +4,12 @@ variable "grafana_url" {
 }
 
 variable "hermes_webhook_url" {
-  description = "Hermes gateway route that receives alert notifications, e.g. https://<your-domain>/webhooks/grafana-error-triage"
+  description = "Kira incident receiver URL, e.g. https://<your-domain>/kira/webhooks/incidents/grafana"
   type        = string
 }
 
 variable "hermes_route_secret" {
-  description = "HMAC-SHA256 secret shared with the Hermes route grafana-error-triage. Set via TF_VAR_hermes_route_secret; never commit it."
+  description = "HMAC-SHA256 secret shared with Kira's Grafana source. Set via TF_VAR_hermes_route_secret; never commit it."
   type        = string
   sensitive   = true
 
@@ -35,12 +35,12 @@ variable "frontend_service_name" {
 }
 
 variable "namespace" {
-  description = "Kubernetes namespace your application runs in (used for the frontend rule's log filter and to route existing cluster alerts to Hermes)."
+  description = "Kubernetes namespace for the frontend rule's log filter and incident notification routing."
   type        = string
 }
 
 variable "runbook_url" {
-  description = "URL of the runbook these alerts should link to (e.g. a doc in your repo explaining what Hermes does with them)."
+  description = "URL of the runbook these alerts should link to."
   type        = string
   default     = ""
 }
