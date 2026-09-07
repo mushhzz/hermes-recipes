@@ -22,7 +22,22 @@ For a macOS login service, copy the generated plist to `~/Library/LaunchAgents/c
 
 The receiver defaults to **127.0.0.1:8645**, independent of Hermes gateway port 8644. Public ingress requires TLS/reverse-proxy rate/body limits. `/health` is a readiness endpoint, not a run-history API. Users read plans/status on GitHub; private diagnostics and evidence remain in the Python controller/store for maintainers.
 
-This workstation's installed controller retains the supervisor name `hermes-sdlc` on that loopback address. That name identifies a background service, not an executable. The generated launchd definition has not been bootstrapped for login/reboot startup; stop the supervised listener before enabling another service manager.
+### Shared stable ingress
+
+`provisioning/kira-ingress.yml` deploys a digest-pinned, unprivileged Nginx container on the existing Linux gateway. It validates both upstreams before changing the ngrok service's upstream using a separate systemd drop-in; the original tunnel unit is preserved.
+
+- `/kira/webhooks/github` forwards to the controller's `/webhooks/github`.
+- `/kira/health` checks the controller; all other paths retain the existing Hermes gateway upstream.
+- The proxy listens only on gateway loopback port `18644`. The controller arrives through an SSH reverse forward bound only to gateway loopback port `18645`.
+- Kira requests have a 1 MiB body limit, bounded header/body/upstream timeouts, request buffering, rate limiting and a concurrent-connection limit. Request-body inspection and access logging are disabled.
+
+Generate the optional forward definition with `scripts/install-sdlc.py --project OWNER/REPO --source /absolute/checkout --approver HUMAN --gateway-host SSH_ALIAS`. The installer preserves existing private configuration and writes both service definitions; it does not start them. On macOS, install and bootstrap `com.hermes.sdlc.plist` and `com.hermes.sdlc-forward.plist` under `~/Library/LaunchAgents/`. Linux definitions are user systemd units.
+
+Deploy the gateway with `ansible-playbook -i YOUR_INVENTORY provisioning/kira-ingress.yml -e public_hostname=YOUR_RESERVED_HOSTNAME`, using inventory group `gateway`. Docker and the existing ngrok service must already be installed; the private SSH forward must already be healthy. Do not claim a domain serving another workload without preserving its routes.
+
+The current host alias is `surface`; the stable URL is `https://semipneumatical-silvana-badly.ngrok-free.dev/kira/webhooks/github`. Both Mac services are launchd-managed; the proxy and existing tunnel are systemd-managed on the gateway. The controller still requires this Mac to be awake, logged in and reachable over SSH. Login services are not an always-on cloud deployment.
+
+This workstation runs the controller as launchd service `com.hermes.sdlc` and its private gateway forward as `com.hermes.sdlc-forward`. The former harness-managed `hermes-sdlc` listener was stopped before bootstrapping launchd; do not run both supervisors for the same config.
 
 The optional Linux playbook supports `sdlc_enabled=true` plus explicit `sdlc_project`, `sdlc_source` and `sdlc_approver` variables. It installs Docker, copies the controller, invokes the same installer and starts a system service as the nonroot service user. Authenticate Hermes and GitHub for that user first; membership in the Docker group is host-equivalent authority. Syntax was checked locally, but no remote host was provisioned.
 
@@ -51,7 +66,7 @@ The reconciler:
 
 ### Bootstrap versus activation
 
-The checked-in policy deliberately starts with `enforcement: "disabled"` and `webhook_url: null`. This stages the desired restrictions without preventing an owner from publishing the initial source and CI. It does **not** mean branch protection or webhook delivery is active.
+For a new deployment, begin with `enforcement: "disabled"` and `webhook_url: null`. This stages the desired restrictions without preventing an owner from publishing the initial source and CI. The checked-in policy records this repository's chosen endpoint and desired enforcement; verify actual GitHub state with the provisioning preview rather than treating policy as applied evidence.
 
 Activation requires actual inputs:
 
@@ -81,9 +96,9 @@ Applied to `mushhzz/hermes-recipes`: seven missing lifecycle labels were created
 
 Kira SDLC (`kira-sdlc`, App ID `4855327`) is registered and installed only on `mushhzz/hermes-recipes` (installation `159635051`). The name was changed from Kira-mushhzz without replacing its key or installation. Its private key and metadata are stored under `~/.hermes/sdlc/github-apps/kira/`, outside the checkout. The host-owned controller config uses `kira-sdlc[bot]`; the administrator's `gh` identity remains `mushhzz`.
 
-Verification: 34 controller regression tests passed. Real controller requests verified App identity, repository-scoped access, human approver permissions and recovery from an expired cached token. A Git remote read succeeded; this public-repository read alone is not proof of authenticated write access. A fresh provisioning plan required no resource changes and no longer reported a missing bot.
+Verification: 35 controller regression tests passed locally. Real controller requests verified App identity, repository-scoped access, human approver permissions and recovery from an expired cached token. Source commit `4989f4b9a60462d0052c3eb6dad163f2f4c6c04f` was published; GitHub's `Lifecycle verification` run `34072674026` passed Python 3.11, 3.12 and 3.13. A public Git remote read succeeded; that read alone is not proof of authenticated write access.
 
-Publication remains disabled, the ruleset remains disabled, and no webhook was created because no public receiver URL is configured. GitHub still reports no published lifecycle workflow. App webhook delivery is also disabled. No source commits, bot pushes, PR creation or live webhook delivery were exercised.
+Publication is enabled in host-owned configuration, with `Lifecycle verification` required and the canonical GitHub HTTPS source used for fresh task checkouts. Repository webhook `675546335` is active and GitHub reported a successful HTTP 200 ping to the shared endpoint. Real public probes verified both gateway and controller health, signed ping acceptance, unsigned-request rejection (401), and oversized-body rejection (413). App-level webhooks remain disabled intentionally: repository webhooks provide delivery without duplicate subscriptions. Branch enforcement is applied separately after the current default-branch CI passes.
 
 REST references: [repository rulesets](https://docs.github.com/en/rest/repos/rules#create-a-repository-ruleset), [repository webhooks](https://docs.github.com/en/rest/repos/webhooks), [Actions workflow permissions](https://docs.github.com/en/rest/actions/permissions).
 

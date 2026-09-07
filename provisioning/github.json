@@ -1,8 +1,8 @@
 {
   "repository": "mushhzz/hermes-recipes",
-  "webhook_url": null,
+  "webhook_url": "https://semipneumatical-silvana-badly.ngrok-free.dev/kira/webhooks/github",
   "ruleset_name": "hermes-sdlc-main",
-  "enforcement": "disabled",
+  "enforcement": "active",
   "required_workflows": ["Lifecycle verification"],
   "required_check_contexts": ["regression (3.11)", "regression (3.12)", "regression (3.13)"],
   "labels": [

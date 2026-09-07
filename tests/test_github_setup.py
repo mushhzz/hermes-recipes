@@ -119,6 +119,12 @@ class GitHubSetupTests(unittest.TestCase):
             self.setup.reconcile(self.policy, apply=True)
         self.assertEqual(self.api.writes, [])
 
+    def test_shared_ingress_prefix_preserves_exact_webhook_target(self):
+        self.policy['webhook_url'] = 'https://hooks.acme.com/kira/webhooks/github'
+        self.setup.reconcile(self.policy, apply=True)
+        self.assertEqual(self.api.hooks[0]['config']['url'], self.policy['webhook_url'])
+        self.assertEqual(self.setup.reconcile(self.policy, apply=True)['applied'], [])
+
     def test_missing_admin_permission_cannot_start_provisioning(self):
         self.api.admin = False
         with self.assertRaises(ValueError):
@@ -127,7 +133,8 @@ class GitHubSetupTests(unittest.TestCase):
 
     def test_secret_bearing_or_unreachable_webhook_urls_are_rejected(self):
         for url in ['http://hooks.acme.com/webhooks/github', 'https://127.0.0.1/webhooks/github',
-                    'https://token@hooks.acme.com/webhooks/github', 'https://hooks.acme.com/webhooks/github?secret=bad']:
+                    'https://token@hooks.acme.com/webhooks/github', 'https://hooks.acme.com/webhooks/github?secret=bad',
+                    'https://hooks.acme.com/kira/../webhooks/github', 'https://hooks.acme.com/kira//webhooks/github']:
             with self.subTest(url=url):
                 with self.assertRaises(ValueError):
                     self.setup.reconcile({**self.policy, 'webhook_url': url}, apply=True)

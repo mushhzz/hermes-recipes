@@ -67,7 +67,7 @@ The old prompt-to-shell issue fixer and JSONL/cron postmortem installers have be
 python3 -m unittest discover -s tests -v
 ```
 
-The [historical pre-cutover lifecycle example](docs/ai-sdlc/lifecycle-example.md) preserves actual model/sandbox/local deployment evidence, not live proof of the new GitHub-only workflow. Maintainers use the Python evaluation library for real-model evaluation; there is no evaluation command. Offline scenarios do not measure model quality. Live publication remains disabled until a dedicated bot, repository policy and integrations are configured.
+The [historical pre-cutover lifecycle example](docs/ai-sdlc/lifecycle-example.md) preserves actual model/sandbox/local deployment evidence, not live proof of the GitHub-only workflow. Maintainers use the Python evaluation library for real-model evaluation; there is no evaluation command. Offline scenarios do not measure model quality. Kira's App authentication, public webhook delivery, remote CI and publication configuration are installed; see [current activation evidence and operating limits](docs/ai-sdlc/operations.md#applied-repository-evidence). Human plan approval and PR merge remain mandatory.
 
 ## License
 

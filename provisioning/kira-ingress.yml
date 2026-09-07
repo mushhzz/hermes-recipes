@@ -1,0 +1,120 @@
+---
+# The existing ngrok domain and gateway remain in place. A /kira/ prefix routes
+# over a separately supervised SSH reverse forward to the controller host.
+- name: Share stable ngrok ingress without replacing existing webhook routes
+  hosts: gateway
+  become: true
+  vars:
+    proxy_port: 18644
+    controller_forward_port: 18645
+    existing_gateway_port: 8644
+    nginx_image: nginx@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c
+    ngrok_executable: /usr/local/bin/ngrok
+    ngrok_service: ngrok-webhook.service
+
+  tasks:
+    - name: Require an explicit account-owned stable hostname
+      assert:
+        that:
+          - public_hostname is defined
+          - public_hostname is match('^[a-z0-9][a-z0-9.-]+[a-z0-9]$')
+
+    - name: Check existing gateway before changing ingress
+      uri:
+        url: "http://127.0.0.1:{{ existing_gateway_port }}/health"
+        return_content: true
+      register: original_gateway
+
+    - name: Check private controller forward before changing ingress
+      uri:
+        url: "http://127.0.0.1:{{ controller_forward_port }}/health"
+        return_content: true
+      register: controller_health
+      failed_when: controller_health.json.service | default('') != 'hermes-sdlc'
+
+    - name: Create proxy configuration directory
+      file:
+        path: /etc/hermes-sdlc
+        state: directory
+        mode: '0755'
+
+    - name: Check pinned proxy image
+      command: "docker image inspect {{ nginx_image }}"
+      register: image
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Pull pinned proxy image when absent
+      command: "docker pull {{ nginx_image }}"
+      when: image.rc != 0
+
+    - name: Install and validate bounded proxy configuration
+      template:
+        src: templates/kira-nginx.conf.j2
+        dest: /etc/hermes-sdlc/nginx.conf
+        mode: '0644'
+        validate: "docker run --rm --network host --entrypoint nginx --mount type=bind,src=%s,dst=/etc/nginx/nginx.conf,readonly {{ nginx_image }} -t"
+      notify: Restart Kira proxy
+
+    - name: Install proxy service
+      template:
+        src: templates/kira-ingress.service.j2
+        dest: /etc/systemd/system/hermes-sdlc-ingress.service
+        mode: '0644'
+      notify: Restart Kira proxy
+
+    - name: Start proxy before touching the existing tunnel
+      systemd_service:
+        name: hermes-sdlc-ingress.service
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Apply pending proxy updates
+      meta: flush_handlers
+
+    - name: Verify existing gateway through the proxy
+      uri:
+        url: "http://127.0.0.1:{{ proxy_port }}/health"
+        return_content: true
+      register: proxied_gateway
+      until: proxied_gateway.status | default(0) == 200
+      retries: 10
+      delay: 1
+      failed_when: proxied_gateway.json != original_gateway.json
+
+    - name: Verify Kira through the proxy
+      uri:
+        url: "http://127.0.0.1:{{ proxy_port }}/kira/health"
+      register: proxied_controller
+      failed_when: proxied_controller.json.service | default('') != 'hermes-sdlc'
+
+    - name: Create existing tunnel override directory
+      file:
+        path: "/etc/systemd/system/{{ ngrok_service }}.d"
+        state: directory
+        mode: '0755'
+
+    - name: Point only the existing tunnel upstream at the verified proxy
+      copy:
+        dest: "/etc/systemd/system/{{ ngrok_service }}.d/kira-ingress.conf"
+        mode: '0644'
+        content: |
+          [Service]
+          ExecStart=
+          ExecStart={{ ngrok_executable }} http http://127.0.0.1:{{ proxy_port }} --url=https://{{ public_hostname }} --log=stdout --inspect=false
+      notify: Restart shared ngrok tunnel
+
+  handlers:
+    - name: Restart Kira proxy
+      systemd_service:
+        name: hermes-sdlc-ingress.service
+        state: restarted
+        daemon_reload: true
+
+    - name: Restart shared ngrok tunnel
+      systemd_service:
+        name: "{{ ngrok_service }}"
+        state: restarted
+        daemon_reload: true

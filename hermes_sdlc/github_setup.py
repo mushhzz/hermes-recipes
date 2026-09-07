@@ -44,8 +44,9 @@ def validate_policy(policy, config):
     if url is not None:
         parts = urlsplit(url)
         if (parts.scheme != 'https' or not parts.hostname or parts.username or parts.password
-                or parts.query or parts.fragment or parts.path != '/webhooks/github'):
-            raise ValueError('Webhook URL must be HTTPS /webhooks/github with no credentials, query or fragment')
+                or parts.query or parts.fragment
+                or not re.fullmatch(r'(?:/[A-Za-z0-9_-]+)*/webhooks/github', parts.path)):
+            raise ValueError('Webhook URL must be HTTPS with a canonical path ending in /webhooks/github and no credentials, query or fragment')
         host = parts.hostname.lower()
         if host == 'localhost' or host.endswith(('.localhost', '.local', '.example', '.invalid')):
             raise ValueError('Webhook URL must identify real public ingress')
