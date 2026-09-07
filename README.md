@@ -4,7 +4,7 @@
 
 Kira investigates Grafana alerts, CI failures and deployment failures, plans changes, implements approved scope and runs isolated checks. You approve the plan, review the code and decide when to merge and deploy.
 
-[Get started](#get-started) · [Operations](docs/operations.md) · [Architecture](docs/architecture.md) · [Security](docs/security-model.md)
+[Get started](#get-started) · [Operations](docs/operations.md) · [Architecture](docs/architecture.md) · [Security](docs/security-model.md) · [Research](docs/ai-sdlc/README.md)
 
 ## How it works
 
@@ -101,7 +101,7 @@ GitHub Actions runs the checks on Python **3.11, 3.12 and 3.13**. The repository
 | `tests/` | Authorization, lifecycle, recovery and provisioning checks |
 | `evaluations/` | Model-evaluation scenarios |
 | `examples/` | Release-readiness example service |
-| `docs/` | Operations, architecture and security |
+| `docs/` | Current operations, architecture, security and preserved AI SDLC research |
 
 ## License
 
