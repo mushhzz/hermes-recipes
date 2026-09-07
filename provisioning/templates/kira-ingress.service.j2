@@ -1,0 +1,15 @@
+[Unit]
+Description=Bounded shared ingress for Kira and existing Hermes webhooks
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/docker run --rm --name hermes-sdlc-ingress --label managed-by=hermes-sdlc --network host --read-only --user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,size=16m,mode=1777 --tmpfs /var/cache/nginx:rw,noexec,nosuid,size=16m,mode=1777 --mount type=bind,src=/etc/hermes-sdlc/nginx.conf,dst=/etc/nginx/nginx.conf,readonly --entrypoint nginx {{ nginx_image }} -g "daemon off;"
+ExecStop=/usr/bin/docker stop --time 10 hermes-sdlc-ingress
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

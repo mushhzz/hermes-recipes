@@ -1,0 +1,26 @@
+# Credentials and local configuration
+.env*
+!.env*.example
+*.env
+!*.env.example
+*.pem
+*.key
+inventory.ini
+!inventory.example.ini
+
+# Python runtime artifacts
+.venv/
+__pycache__/
+*.py[cod]
+
+# Terraform local state and credentials
+.terraform/
+*.tfstate*
+*.tfvars
+*.tfvars.json
+crash.log
+
+# Local tooling and editor output
+.firecrawl/
+.DS_Store
+*.swp

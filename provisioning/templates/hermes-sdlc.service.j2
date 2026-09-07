@@ -1,0 +1,20 @@
+[Unit]
+Description=Kira SDLC controller
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User={{ ansible_user }}
+SupplementaryGroups=docker
+WorkingDirectory={{ ('/home/' ~ ansible_user ~ '/.hermes/sdlc') | replace('%', '%%') }}
+Environment={{ ('PATH=/home/' ~ ansible_user ~ '/.local/bin:/usr/local/bin:/usr/bin:/bin') | replace('%', '%%') | to_json(ensure_ascii=False) }}
+Environment={{ ('HERMES_SDLC_CONFIG=/home/' ~ ansible_user ~ '/.hermes/sdlc/config.json') | replace('%', '%%') | to_json(ensure_ascii=False) }}
+ExecStart=/usr/bin/python3 {{ (sdlc_install_root ~ '/hermes_sdlc/service.py') | replace('%', '%%') | replace('$', '$$') | to_json(ensure_ascii=False) }}
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

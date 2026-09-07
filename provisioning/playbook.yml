@@ -1,0 +1,128 @@
+---
+# Install Kira on a Debian/Ubuntu host with an authenticated Hermes runtime.
+# Supply sdlc_project, sdlc_source and sdlc_approver explicitly.
+- name: Deploy Kira SDLC
+  hosts: kira
+  become: false
+  vars:
+    sdlc_project: ""
+    sdlc_source: ""
+    sdlc_approver: ""
+    sdlc_install_root: "/home/{{ ansible_user }}/services/kira-sdlc"
+    sdlc_image: python:3.12-slim
+
+  tasks:
+    - name: Require an explicit project, existing source checkout and human approver
+      assert:
+        that:
+          - sdlc_project | length > 0
+          - sdlc_source | length > 0
+          - sdlc_approver | length > 0
+          - ansible_facts.python.version.major == 3
+          - ansible_facts.python.version.minor >= 11
+        fail_msg: "Kira requires Python 3.11+ and explicit sdlc_project, sdlc_source and sdlc_approver."
+
+    - name: Check installed Hermes interpreter
+      stat:
+        path: "/home/{{ ansible_user }}/.hermes/hermes-agent/venv/bin/python"
+      register: hermes_python
+
+    - name: Require Hermes installation before provisioning Kira
+      assert:
+        that: hermes_python.stat.exists
+        fail_msg: "Install and authenticate Hermes as the service user first."
+
+    - name: Install controller prerequisites
+      become: true
+      apt:
+        name: [ca-certificates, git, gh, openssl, python3]
+        state: present
+        update_cache: true
+
+    - name: Check for Docker
+      command: docker --version
+      register: docker_check
+      failed_when: false
+      changed_when: false
+
+    - name: Install Docker when absent
+      become: true
+      apt:
+        name: docker.io
+        state: present
+      when: docker_check.rc != 0
+
+    - name: Start Docker
+      become: true
+      systemd_service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Permit the service account to run check containers
+      become: true
+      user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: true
+
+    - name: Create private installation directory
+      file:
+        path: "{{ sdlc_install_root }}"
+        state: directory
+        mode: '0700'
+
+    - name: Install controller and operating references
+      copy:
+        src: "{{ playbook_dir }}/../{{ item }}"
+        dest: "{{ sdlc_install_root }}/"
+        mode: preserve
+      loop:
+        - hermes_sdlc
+        - scripts
+        - tests
+        - evaluations
+        - examples
+        - integrations
+        - docs
+        - provisioning
+        - README.md
+      register: sdlc_code
+
+    - name: Pull trusted sandbox image
+      become: true
+      command:
+        argv: [docker, pull, "{{ sdlc_image }}"]
+      register: sdlc_pull
+      changed_when: "'Downloaded newer image' in sdlc_pull.stdout"
+
+    - name: Create private configuration, service definition and Hermes skill
+      command:
+        argv:
+          - python3
+          - "{{ sdlc_install_root }}/scripts/install-sdlc.py"
+          - --project
+          - "{{ sdlc_project }}"
+          - --source
+          - "{{ sdlc_source }}"
+          - --approver
+          - "{{ sdlc_approver }}"
+          - --image
+          - "{{ sdlc_image }}"
+      changed_when: false
+
+    - name: Install controller service
+      become: true
+      template:
+        src: templates/hermes-sdlc.service.j2
+        dest: /etc/systemd/system/hermes-sdlc.service
+        mode: '0644'
+      register: sdlc_unit
+
+    - name: Start controller
+      become: true
+      systemd_service:
+        name: hermes-sdlc
+        state: "{{ 'restarted' if sdlc_code.changed or sdlc_unit.changed else 'started' }}"
+        enabled: true
+        daemon_reload: true

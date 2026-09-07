@@ -1,0 +1,40 @@
+{{/*
+  Structured Grafana evidence for Kira's authenticated incident receiver.
+  The source URL selects the project; payload fields cannot grant authority.
+  Keep alert labels and startsAt stable so repeated observations coalesce.
+*/}}
+{{ define "hermes.payload" -}}
+{{ coll.Dict
+  "type" "grafana-alert"
+  "status" .Status
+  "alertname" (index .CommonLabels "alertname")
+  "environment" (index .CommonLabels "deployment_environment")
+  "namespace" (index .CommonLabels "namespace")
+  "error_type" (index .CommonLabels "error_type")
+  "severity" (index .CommonLabels "severity")
+  "summary" (index .CommonAnnotations "summary")
+  "description" (index .CommonAnnotations "description")
+  "loki_query" (index .CommonAnnotations "loki_query")
+  "runbook_url" (index .CommonAnnotations "runbook_url")
+  "alert_count" (len .Alerts)
+  "alerts" (tmpl.Exec "hermes.alerts" .Alerts | data.JSON)
+  "externalURL" .ExternalURL
+  "groupKey" .GroupKey
+| data.ToJSON }}
+{{- end }}
+
+{{ define "hermes.alerts" -}}
+{{- $out := coll.Slice -}}
+{{- range . -}}
+{{ $out = coll.Append (coll.Dict
+  "status" .Status
+  "labels" .Labels
+  "annotations" .Annotations
+  "startsAt" (.StartsAt | date "2006-01-02T15:04:05Z07:00")
+  "values" .Values
+  "panelURL" .PanelURL
+  "silenceURL" .SilenceURL
+) $out }}
+{{- end -}}
+{{ $out | data.ToJSON }}
+{{- end }}
