@@ -1,11 +1,12 @@
 import copy
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
-from hermes_sdlc.adapters import Runtime
+from hermes_sdlc.adapters import AdapterError, Runtime
 from hermes_sdlc.config import LIMITS
 from hermes_sdlc.engine import APPROVAL_CHECKED, APPROVAL_UNCHECKED, Deferred, Engine
 from hermes_sdlc.store import Conflict, fingerprint
@@ -301,6 +302,46 @@ class GitHubWorkflowTests(unittest.TestCase):
         self.assertEqual(self.issue['state'], 'closed')
         self.assertIn('kira:needs-human', self.labels)
         self.assertNotIn('kira:verified', self.labels)
+
+    def test_review_cannot_report_unchanged_pr_as_a_completed_revision(self):
+        workspace = Path(self.temp.name) / 'repository'
+        workspace.mkdir()
+        def git(*args):
+            return subprocess.check_output(
+                ['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                 '-c', 'commit.gpgsign=false', '-C', str(workspace), *args], text=True).strip()
+        git('init', '--quiet')
+        workspace.joinpath('README.md').write_text('Original\n')
+        git('add', 'README.md')
+        git('commit', '--quiet', '-m', 'base')
+        base = git('rev-parse', 'HEAD')
+        workspace.joinpath('README.md').write_text('Existing PR implementation\n')
+        git('commit', '--quiet', '-am', 'initial implementation')
+        previous = git('rev-parse', 'HEAD')
+        spec = {**self.spec, 'base_sha': base}
+        digest = fingerprint(spec)
+        self.store.transition(self.run['id'], 'awaiting_approval', {'awaiting_approval'},
+                              {'spec': spec, 'spec_hash': digest, 'base_sha': base})
+        self.store.approve(self.run['id'], digest, 'human')
+        initial = self.store.claim(30, 2)
+        pr = {'number': 9, 'url': 'https://github.com/acme/app/pull/9', 'head_sha': previous}
+        self.store.finish(initial, 'awaiting_review', {'head_sha': previous, 'pr': pr})
+        self.store.schedule(self.run['id'], 'revise', {'feedback': 'Make a scoped refinement.'},
+                            'review-request', {'awaiting_review'})
+        job = self.store.claim(30, 2)
+        project = self.engine.config['projects']['acme/app']
+        project.update(allowed_paths=['README.md'], checks=[{'name': 'test', 'argv': ['python', '-m', 'unittest']}])
+        self.runtime.prepare.return_value = workspace
+        self.runtime.git.side_effect = lambda path, *args: git(*args)
+        self.runtime.propose.side_effect = lambda stage, context: {
+            'proposal': {'verdict': 'pass', 'findings': []} if stage == 'review' else {'changes': []}}
+        self.runtime.check.return_value = [{'name': 'test', 'passed': True, 'exit_code': 0}]
+        self.runtime.publish.return_value = pr
+        with self.assertRaises(AdapterError):
+            self.engine.implement(job)
+        self.runtime.publish.assert_not_called()
+        self.assertEqual(git('rev-parse', 'HEAD'), previous)
+        self.assertFalse([e for e in self.store.history(self.run['id']) if e['kind'] == 'verified_commit'])
 
 
 if __name__ == '__main__':

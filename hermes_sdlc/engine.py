@@ -137,10 +137,14 @@ class Engine:
             size += len(text.encode())
             files[relative] = text
         project = self.config['projects'][run['project']]
-        return {'title': run['title'], 'task': run['body'], 'kind': run['kind'],
-                'repository_files': paths[:5000], 'files': files, 'allowed_paths': project['allowed_paths'],
-                'checks': [{'name': c['name'], 'argv': c['argv']} for c in project['checks']],
-                'specification': run['data'].get('spec'), 'base_sha': run['data'].get('base_sha')}
+        context = {'title': run['title'], 'kind': run['kind'],
+                   'repository_files': paths[:5000], 'files': files, 'allowed_paths': project['allowed_paths'],
+                   'checks': [{'name': c['name'], 'argv': c['argv']} for c in project['checks']],
+                   'specification': run['data'].get('spec'), 'base_sha': run['data'].get('base_sha')}
+        if selected is None:
+            # Original issue requirements inform drafts, not an already revised approval.
+            context['task'] = run['body']
+        return context
 
     def propose(self, job, stage, context):
         run = self.store.get(job['run_id'])
@@ -247,6 +251,8 @@ class Engine:
             raise Conflict('No approval for this specification')
         workspace = self.runtime.prepare(project, run['id'], run['data']['base_sha'])
         feedback = job['payload'].get('feedback', '')
+        repair_findings = {}
+        previous_head = run['data'].get('head_sha') or run['data']['base_sha']
         # Each job has a checkpointed successful commit: crash retries publish that commit,
         # rather than asking a nondeterministic model to regenerate an already-reviewed diff.
         completion_key = f'job_{job["id"]}_verified_sha'
@@ -254,16 +260,20 @@ class Engine:
             for attempt in range(self.config['limits']['max_attempts']):
                 context = self.context(self.store.get(run['id']), workspace, spec['files'])
                 context['feedback'] = feedback
-                proposal = self.propose(job, 'revise' if feedback or job['action'] == 'revise' else 'implement', context)
+                context['repair_findings'] = repair_findings
+                context['is_pr_revision'] = bool(run['data'].get('head_sha'))
+                proposal = self.propose(job, 'revise' if feedback or repair_findings or job['action'] == 'revise' else 'implement', context)
                 self.apply_changes(workspace, project, spec, proposal)
                 checks = self.runtime.check(project, workspace)
                 self.store.checkpoint(job, {}, 'checks', {'attempt': attempt + 1, 'results': checks})
                 if any(c['exit_code'] == 125 for c in checks):
                     raise AdapterError('Docker could not start a check container; fix sandbox configuration before retrying')
                 if not checks or not all(c['passed'] for c in checks):
-                    feedback = {'failed_checks': checks}
+                    repair_findings = {'failed_checks': checks}
                     continue
                 review_context = self.context(self.store.get(run['id']), workspace, spec['files'])
+                review_context['feedback'] = feedback
+                review_context['is_pr_revision'] = bool(run['data'].get('head_sha'))
                 review_context['checks'] = checks
                 review_context['diff'] = self.runtime.git(workspace, 'diff', '--no-ext-diff', run['data']['base_sha'])
                 verdict = self.propose(job, 'review', review_context)
@@ -271,13 +281,13 @@ class Engine:
                     raise AdapterError('Independent review returned no valid verdict')
                 self.store.checkpoint(job, {}, 'review', verdict)
                 if verdict['verdict'] != 'pass':
-                    feedback = {'review_findings': verdict['findings']}
+                    repair_findings = {'review_findings': verdict['findings']}
                     continue
                 self.runtime.git(workspace, 'add', '--', *spec['files'])
                 changed = self.runtime.git(workspace, 'diff', '--cached', '--name-only').splitlines()
                 if not changed:
-                    if self.runtime.git(workspace, 'rev-parse', 'HEAD') == run['data']['base_sha']:
-                        raise AdapterError('Implementation produced no change')
+                    if self.runtime.git(workspace, 'rev-parse', 'HEAD') == previous_head:
+                        raise AdapterError('Requested implementation or revision produced no new change')
                 else:
                     if any(path not in spec['files'] for path in changed):
                         raise AdapterError('Staged diff exceeds approved scope')
@@ -286,7 +296,8 @@ class Engine:
                 self.store.checkpoint(job, {completion_key: sha, 'head_sha': sha}, 'verified_commit', {'sha': sha})
                 break
             else:
-                self.store.finish(job, 'needs_human', evidence=('repair_budget_exhausted', {'feedback': feedback}))
+                self.store.finish(job, 'needs_human', evidence=('repair_budget_exhausted',
+                                  {'feedback': feedback, 'repair_findings': repair_findings}))
                 self.comment(self.store.get(run['id']), f'repair-exhausted-{job["id"]}', self.status_text(run['id']))
                 return
         run = self.store.get(run['id'])
