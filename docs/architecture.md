@@ -34,7 +34,7 @@ Repeated observations append evidence without changing the original task or appr
 | :--- | :--- | :--- |
 | Intake | Persist an event and schedule work. | Valid signature, delivery identity and authorized actor |
 | Plan | Pin a base commit and publish a specification. | Summary, acceptance criteria, scope, steps, risk, design and rollback |
-| Approve | Bind approval to the specification hash. | Live human identity, repository permission and matching issue/PR |
+| Approve | Bind a canonical plan checkbox edit to the specification hash. | Live authorized human editor, exact old/new/live body and matching run issue/comment |
 | Implement | Apply validated changes in a unique workspace. | Approved file scope and configured limits |
 | Check | Run deterministic checks and independent model review. | All configured checks and review must pass |
 | Publish | Reconcile a stable `sdlc/RUN` branch and PR. | Explicit publication policy and verified App identity |
@@ -72,9 +72,11 @@ A specification contains:
 - Risk, implementation steps, design and rollback
 - Pinned base SHA and specification revision
 
-The controller fingerprints that object. A human approval names both the run and its exact SHA-256 digest. A revised specification requires new approval.
+The controller fingerprints that object. A human checks the approval control on the canonical plan comment; the controller binds that edit to the exact stored revision and SHA-256 digest. The user does not copy a hash. A revised draft requires new approval.
 
-GitHub comments present the specification as Markdown. Formatting does not modify the stored specification or its hash.
+One bot-owned GitHub comment presents the current plan and state. SQLite stores its ID, exact rendering, body hash, revision and specification hash; append-only evidence retains previous specifications and projections. The oldest genuine legacy plan can be adopted without creating another comment. Replanning PATCHes the canonical comment and clears approval.
+
+Ordinary authorized issue comments before approval schedule bounded replanning. In-flight planning defers feedback and early checkbox events through the existing durable event queue. Checkbox approval compares the webhook's previous body and live updated body against the exact canonical rendering, then atomically checks the current stored projection and specification. Only the designated unchecked-to-checked action is permitted. Approval locks scope; subsequent implementation feedback uses native PR reviews.
 
 | Model stage | Structured result |
 | :--- | :--- |

@@ -16,34 +16,49 @@ from .incidents import normalize
 SHA = re.compile(r'^[0-9a-f]{40}$')
 KINDS = {'feature', 'bug', 'incident', 'maintenance', 'migration'}
 
+APPROVAL_UNCHECKED = '- [ ] Approve this revision for implementation'
+APPROVAL_CHECKED = '- [x] Approve this revision for implementation'
 
 class Deferred(RuntimeError):
     """Authenticated event arrived before its lifecycle prerequisite."""
 
 
-def _plan_comment(run_id, spec, digest):
+def _plan_comment(run_id, spec, digest, *, state='awaiting_approval', approved_by=None, changes=()):
     """Present the unchanged, fingerprinted specification for human review."""
     from html import escape
 
+    def text(value):
+        # Model prose cannot open HTML/Markdown constructs around trusted controls.
+        return re.sub(r'([\\`*_\[\]{}()#+.!|>~-])', r'\\\1', escape(value))
+
     def items(values, numbered=False):
         return '\n'.join(
-            (f'{index}. ' if numbered else '- [ ] ') + value.replace('\n', '\n   ')
+            (f'{index}. ' if numbered else '- ') + text(value).replace('\n', '\n   ')
             for index, value in enumerate(values, 1))
 
     scope = '\n'.join('- <code>' + escape(path) + '</code>' for path in spec['files'])
+    status = state.replace('_', ' ').capitalize()
+    if state in {'planning', 'awaiting_approval'}:
+        status = 'Awaiting human approval'
+    approval = (
+        f'Approved by **{escape(approved_by)}** for revision **{spec["revision"]}**.'
+        if approved_by else
+        APPROVAL_UNCHECKED if state in {'planning', 'awaiting_approval'} else
+        'Approval is unavailable while this run is ' + status.lower() + '.')
     return (
         '## Kira · Implementation plan\n\n'
-        + spec['summary'] + '\n\n'
-        + f'**Risk:** {spec["risk"].capitalize()} · **Status:** Awaiting human approval\n\n'
+        + text(spec['summary']) + '\n\n'
+        + f'**Risk:** {spec["risk"].capitalize()} · **Status:** {status} · **Revision:** {spec["revision"]}\n\n'
+        + ('### Changed since previous revision\n\n' + '\n'.join('- ' + item for item in changes) + '\n\n' if changes else '')
         + '### Scope\n\n' + scope + '\n\n'
         + '### Acceptance criteria\n\n' + items(spec['acceptance']) + '\n\n'
         + '### Implementation steps\n\n' + items(spec['steps'], numbered=True) + '\n\n'
-        + '### Design\n\n' + spec['design'] + '\n\n'
-        + '### Rollback\n\n' + spec['rollback'] + '\n\n'
+        + '### Design\n\n' + text(spec['design']) + '\n\n'
+        + '### Rollback\n\n' + text(spec['rollback']) + '\n\n'
         + '### Approve this plan\n\n'
-        + 'After reviewing the scope and acceptance criteria, post this command as a new comment. '
+        + 'Discuss changes in an ordinary issue comment before approving. '
           'Approval authorizes implementation only—not PR merge or deployment.\n\n'
-        + f'```text\n/sdlc approve {run_id} {digest}\n```\n\n'
+        + approval + '\n\n'
         + '<details>\n<summary>Specification reference</summary>\n\n'
         + f'- **Run:** `{run_id}`\n'
         + f'- **Base commit:** `{spec["base_sha"]}`\n'
@@ -88,10 +103,6 @@ class Engine:
         if permission.get('permission') not in {'write', 'maintain', 'admin'}:
             raise Conflict('Approver no longer has repository write permission')
 
-    def approve(self, run_id, digest, actor):
-        run = self.store.get(run_id)
-        self.authorize(run['project'], actor)
-        self.store.approve(run_id, digest, actor)
 
     def context(self, run, workspace, selected=None):
         paths = self.runtime.git(workspace, 'ls-files').splitlines()
@@ -170,9 +181,14 @@ class Engine:
             safe_path(path, project['allowed_paths'])
         spec['base_sha'] = base
         spec['revision'] = run['data'].get('spec_revision', 0)
+        previous = run['data'].get('spec')
+        changes = [key.replace('_', ' ').capitalize() + ' updated.'
+                   for key in ('summary', 'acceptance', 'files', 'steps', 'design', 'rollback')
+                   if previous and previous.get(key) != spec.get(key)]
         digest = fingerprint(spec)
-        self.store.checkpoint(job, {'spec': spec, 'spec_hash': digest}, 'specification', {'spec': spec, 'digest': digest})
-        self.comment(run, f'plan-{digest}', _plan_comment(run['id'], spec, digest))
+        self.store.checkpoint(job, {'spec': spec, 'spec_hash': digest, 'plan_changes': changes},
+                              'specification', {'spec': spec, 'digest': digest})
+        self.publish_plan(run['id'])
         self.store.finish(job, 'awaiting_approval')
 
     def apply_changes(self, workspace, project, spec, proposal):
@@ -276,6 +292,131 @@ class Engine:
         if pr.get('merged_sha'):
             self.merged(run['id'], pr['merged_sha'])
 
+    def publish_plan(self, run_id):
+        run = self.store.get(run_id)
+        project = self.config['projects'][run['project']]
+        spec = run['data'].get('spec')
+        number = run['data'].get('issue')
+        if not project['publish'] or not number or not spec:
+            return
+        if self.runtime.identity() != project['bot_login']:
+            raise AdapterError('Wrong identity for publishing lifecycle evidence')
+        digest = run['data'].get('spec_hash')
+        approved_by = next((e['value']['actor'] for e in self.store.history(run_id)
+                            if e['kind'] == 'approved' and e['value']['spec_hash'] == digest), None)
+        tag = f'<!-- hermes-sdlc:{run_id}:plan -->'
+        body = _plan_comment(run_id, spec, digest or fingerprint(spec), state=run['state'],
+                             approved_by=approved_by, changes=run['data'].get('plan_changes', []))
+        controls = int(not approved_by and run['state'] in {'planning', 'awaiting_approval'})
+        if body.count(APPROVAL_UNCHECKED) != controls or APPROVAL_CHECKED in body:
+            raise AdapterError('Plan rendering contains ambiguous approval controls')
+        body += '\n\n' + tag
+        metadata = run['data'].get('plan_comment')
+        endpoint = f'/repos/{run["project"]}/issues'
+        if metadata:
+            comment = self.runtime.github('GET', f'{endpoint}/comments/{metadata["id"]}')
+        else:
+            # Reconcile both an interrupted POST and pre-cutover plans, oldest first.
+            comment = None
+            page = 1
+            legacy = re.compile(r'<!-- hermes-sdlc:' + re.escape(run_id) + r':plan-[0-9a-f]{64} -->$')
+            while comment is None:
+                comments = self.runtime.github('GET', f'{endpoint}/{number}/comments?per_page=100&page={page}')
+                comment = next((c for c in comments if c.get('user', {}).get('login') == project['bot_login']
+                                and (c.get('body', '').endswith(tag) or legacy.search(c.get('body', '')))), None)
+                if len(comments) < 100:
+                    break
+                page += 1
+        if comment:
+            if (comment.get('user', {}).get('login') != project['bot_login']
+                    or comment.get('issue_url') != f'https://api.github.com/repos/{run["project"]}/issues/{number}'):
+                raise Conflict('Canonical plan is not owned by the bot on the run issue')
+            # Do not erase a legitimate click while its signed event is still queued.
+            pending_click = (body.count(APPROVAL_UNCHECKED) == 1
+                             and comment['body'] == body.replace(APPROVAL_UNCHECKED, APPROVAL_CHECKED, 1))
+            if comment['body'] != body and not pending_click:
+                self.runtime.github('PATCH', f'{endpoint}/comments/{comment["id"]}', {'body': body})
+        else:
+            comment = self.runtime.github('POST', f'{endpoint}/{number}/comments', {'body': body})
+        self.store.record_plan_comment(run, comment['id'], body)
+
+    def plan_interaction(self, name, payload):
+        comment = payload.get('comment', {})
+        actor = payload.get('sender', {}).get('login')
+        project = self.config['projects'][name]
+        if actor not in project['approvers'] or actor == project['bot_login']:
+            return
+        number = payload.get('issue', {}).get('number')
+        run = next((r for r in self.store.list(name) if r['data'].get('issue') == number), None)
+        if run is None:
+            return
+        action = payload.get('action')
+        if action == 'created':
+            body = comment.get('body', '').strip()
+            if not body or body.startswith('/'):
+                return
+            if any(e['kind'] == 'approved' for e in self.store.history(run['id'])):
+                return
+            self.authorize(name, actor)
+            self.live_human_comment(name, payload)
+            request_id = f'github:{name}:{comment["id"]}'
+            if any(e['kind'] == 'human_recovery' and e['value'].get('request_id') == request_id
+                   for e in self.store.history(run['id'])):
+                return
+            if run['state'] in {'queued', 'planning'}:
+                raise Deferred('Feedback waits for the current planning checkpoint')
+            if run['state'] not in {'awaiting_approval', 'needs_human'}:
+                return
+            self.store.recover(run['id'], 'plan', actor, body, request_id=request_id)
+            self.publish_plan(run['id'])
+            return
+        if action != 'edited':
+            return
+        metadata = run['data'].get('plan_comment')
+        if (metadata is None and run['state'] in {'queued', 'planning'}
+                and comment.get('user', {}).get('login') == project['bot_login']
+                and comment.get('body', '').endswith(f'<!-- hermes-sdlc:{run["id"]}:plan -->')):
+            raise Deferred('Approval waits for canonical comment publication')
+        if not metadata or metadata['id'] != comment.get('id'):
+            return
+        self.authorize(name, actor)
+        if run['state'] in {'queued', 'planning'} and not any(
+                e['kind'] == 'approved' for e in self.store.history(run['id'])):
+            raise Deferred('Approval waits for the planning publication checkpoint')
+        before = payload.get('changes', {}).get('body', {}).get('from')
+        after = comment.get('body')
+        # A replay after successful approval has no further effect, even after UI refresh.
+        if any(e['kind'] == 'approved' and e['value']['spec_hash'] == metadata['spec_hash']
+               for e in self.store.history(run['id'])):
+            self.publish_plan(run['id'])
+            return
+        live = self.runtime.github('GET', f'/repos/{name}/issues/comments/{metadata["id"]}')
+        valid = (
+            metadata['spec_hash'] == run['data'].get('spec_hash')
+            and metadata['revision'] == run['data']['spec']['revision']
+            and before == metadata['body'] and before.count(APPROVAL_UNCHECKED) == 1
+            and APPROVAL_CHECKED not in before
+            and after == before.replace(APPROVAL_UNCHECKED, APPROVAL_CHECKED, 1)
+            and live.get('body') == after
+            and live.get('user', {}).get('login') == project['bot_login']
+            and comment.get('user', {}).get('login') == project['bot_login']
+            and live.get('issue_url') == f'https://api.github.com/repos/{name}/issues/{number}')
+        if not valid:
+            self.publish_plan(run['id'])
+            raise Conflict('Only the current plan approval checkbox may change')
+        self.store.approve(run['id'], metadata['spec_hash'], actor, plan_comment=metadata)
+        self.publish_plan(run['id'])
+
+    def live_human_comment(self, name, payload):
+        comment = payload['comment']
+        actor = payload.get('sender', {}).get('login')
+        live = self.runtime.github('GET', f'/repos/{name}/issues/comments/{comment["id"]}')
+        if (live.get('body') != comment.get('body') or live.get('user', {}).get('login') != actor
+                or comment.get('user', {}).get('login') != actor or live.get('user', {}).get('type') != 'User'
+                or live.get('issue_url') != f'https://api.github.com/repos/{name}/issues/{payload["issue"]["number"]}'):
+            raise Conflict('Comment does not match its live human author and issue')
+        return live
+
     def comment(self, run, marker, text):
         project = self.config['projects'][run['project']]
         number = run['data'].get('issue') or (run['data'].get('pr') or {}).get('number')
@@ -326,6 +467,7 @@ class Engine:
         if actor == project.get('bot_login'):
             raise Conflict('Bot cannot approve its own merge')
         self.store.transition(run_id, 'awaiting_deployment', {'awaiting_review'}, {'merge_sha': sha}, ('merged', {'sha': sha, 'actor': actor}))
+        self.publish_plan(run_id)
 
     def deployed(self, run_id, deployment):
         run = self.store.get(run_id)
@@ -342,6 +484,7 @@ class Engine:
         self.store.schedule(run_id, 'verify', {'deployment': deployment}, f'{run_id}:deployment:{deployment["id"]}',
                             {'awaiting_deployment', 'needs_human'}, {'deployment': deployment},
                             available=start + project['observation_seconds'])
+        self.publish_plan(run_id)
 
     def verify(self, job):
         run = self.store.get(job['run_id'])
@@ -371,7 +514,7 @@ class Engine:
         comment = payload.get('comment', {})
         body = comment.get('body', '').strip()
         header, _, feedback = body.partition('\n')
-        match = re.fullmatch(r'/sdlc (approve|status|cancel|recover) ([0-9a-f]{20})(?: ([a-z0-9]+))?', header)
+        match = re.fullmatch(r'/sdlc (status|cancel|recover) ([0-9a-f]{20})(?: ([a-z0-9]+))?', header)
         if not match:
             return
         action, run_id, argument = match.groups()
@@ -388,14 +531,15 @@ class Engine:
         self.authorize(name, actor)
         marker = f'command-{comment["id"]}'
         try:
-            if action == 'approve':
-                if not argument or not re.fullmatch(r'[0-9a-f]{64}', argument) or feedback:
-                    raise Conflict('Approval requires only the exact specification hash')
-                self.approve(run_id, argument, actor)
-            elif action == 'recover':
+            if action == 'recover':
                 if argument not in {'plan', 'revise', 'verify'}:
                     raise Conflict('Recovery requires plan, revise or verify')
-                self.store.recover(run_id, argument, actor, feedback.strip(), request_id=f'github:{name}:{comment["id"]}')
+                request_id = f'github:{name}:{comment["id"]}'
+                repeated = any(e['kind'] == 'human_recovery' and e['value'].get('request_id') == request_id
+                               for e in self.store.history(run_id))
+                if argument == 'plan' and run['state'] != 'needs_human' and not repeated:
+                    raise Conflict('Discuss draft changes in an ordinary issue comment')
+                self.store.recover(run_id, argument, actor, feedback.strip(), request_id=request_id)
             else:
                 if argument or feedback:
                     raise Conflict('Status and cancel take only the run ID')
@@ -404,7 +548,10 @@ class Engine:
         except Conflict as exc:
             self.comment(run, marker, f'Lifecycle request rejected: {exc}')
             raise
-        self.comment(self.store.get(run_id), marker, self.status_text(run_id))
+        if self.store.get(run_id)['data'].get('spec') and self.store.get(run_id)['data'].get('issue'):
+            self.publish_plan(run_id)
+        else:
+            self.comment(self.store.get(run_id), marker, self.status_text(run_id))
 
     def status_text(self, run_id):
         run = self.store.get(run_id)
@@ -458,8 +605,10 @@ class Engine:
             kind = next(iter(kinds), 'incident' if 'auto-triaged' in labels else 'feature')
             self.submit(name, kind, live['title'], live.get('body') or 'Clarify this issue before proposing implementation.',
                         f'{name}:issue:{issue["number"]}', {'issue': issue['number']})
-        elif kind == 'issue_comment' and payload.get('action') == 'created':
-            self.github_command(name, payload)
+        elif kind == 'issue_comment':
+            if payload.get('action') == 'created':
+                self.github_command(name, payload)
+            self.plan_interaction(name, payload)
         elif kind == 'pull_request':
             pr = payload['pull_request']
             run = self.find_pr(name, pr['number'], pr.get('head', {}).get('ref'))
@@ -559,6 +708,7 @@ class Engine:
                 elif job['action'] == 'plan':
                     self.plan(job)
                 elif job['action'] in {'implement', 'revise'}:
+                    self.publish_plan(job['run_id'])
                     self.implement(job)
                 elif job['action'] == 'verify':
                     self.verify(job)
@@ -577,6 +727,11 @@ class Engine:
                         print('GitHub failure notification unavailable; durable failure evidence retained', flush=True)
         finally:
             stopped.set()
+            if job['run_id']:
+                try:
+                    self.publish_plan(job['run_id'])
+                except Exception:
+                    print('Plan display refresh unavailable; durable run state retained', flush=True)
             thread.join(timeout=2)
             self.runtime.cancelled = lambda: False
         return True
