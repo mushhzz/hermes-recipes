@@ -80,6 +80,29 @@ class GitHubSetupTests(unittest.TestCase):
         self.assertEqual(sum(label['name'] == 'ready-to-fix' for label in self.api.labels), 1)
         self.assertEqual(sum(label['name'].casefold() == 'bug' for label in self.api.labels), 1)
 
+    def test_solo_policy_removes_second_person_gates_but_preserves_protection(self):
+        self.setup.reconcile({**self.policy, 'solo_maintainer': True}, apply=True)
+        managed = next(rule for rule in self.api.rules if rule['name'] == self.policy['ruleset_name'])
+        rules = {rule['type']: rule for rule in managed['rules']}
+        review = rules['pull_request']['parameters']
+        self.assertEqual(review['required_approving_review_count'], 0)
+        self.assertFalse(review['require_last_push_approval'])
+        self.assertFalse(review['require_extra_approval_for_unattributed_changes'])
+        self.assertTrue(review['required_review_thread_resolution'])
+        self.assertEqual(managed['bypass_actors'], [])
+        self.assertIn('deletion', rules)
+        self.assertIn('non_fast_forward', rules)
+        self.assertEqual(rules['required_status_checks']['parameters']['required_status_checks'],
+                         [{'context': 'regression'}])
+        team = next(rule for rule in ruleset(self.policy)['rules'] if rule['type'] == 'pull_request')['parameters']
+        self.assertEqual(team['required_approving_review_count'], 1)
+        self.assertTrue(team['require_last_push_approval'])
+
+    def test_solo_policy_rejects_non_boolean_before_mutation(self):
+        with self.assertRaisesRegex(ValueError, 'solo_maintainer must be a boolean'):
+            self.setup.reconcile({**self.policy, 'solo_maintainer': 'false'}, apply=True)
+        self.assertEqual(self.api.writes, [])
+
     def test_labels_on_later_pages_are_not_created_again(self):
         self.api.labels = [{'name': f'existing-{i}'} for i in range(100)] + copy.deepcopy(self.policy['labels'])
         plan = self.setup.reconcile(self.policy)

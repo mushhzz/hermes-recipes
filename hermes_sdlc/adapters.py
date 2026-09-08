@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from datetime import datetime, timezone
+from html import escape
 from pathlib import Path
 
 from .config import safe_path, ConfigurationError
@@ -28,6 +29,49 @@ def timestamp(value: str) -> float:
     if dt.tzinfo is None:
         raise AdapterError('Timestamps must include a timezone')
     return dt.timestamp()
+
+
+def _incident_body(name, run):
+    """Publish incident context, not internal prompts or the upstream API envelope."""
+    incident = run.get('data', {}).get('incident', {})
+    payload = incident.get('payload', {})
+    provider = incident.get('provider')
+    fields = [('Repository', name)]
+    link = None
+    if provider == 'github':
+        summary = 'A CI workflow failed. The cause has not yet been established.'
+        fields.extend((label, payload.get(key)) for label, key in (
+            ('Workflow', 'name'), ('Branch', 'head_branch'), ('Revision', 'head_sha'),
+            ('Attempt', 'run_attempt'), ('Completed', 'updated_at')))
+        if type(payload.get('id')) is int and payload['id'] > 0:
+            link = f'https://github.com/{name}/actions/runs/{payload["id"]}'
+    elif provider == 'argocd':
+        summary = 'ArgoCD reported a deployment problem. The cause has not yet been established.'
+        fields.extend((label, payload.get(key)) for label, key in (
+            ('Application', 'app'), ('Namespace', 'namespace'), ('Signal', 'reason'),
+            ('Revision', 'revision'), ('Started', 'startedAt')))
+    elif provider == 'grafana':
+        summary = 'Grafana reported a firing alert. The cause has not yet been established.'
+        labels = payload.get('commonLabels') or {}
+        if not isinstance(labels, dict):
+            labels = {}
+        fields.append(('Alert', payload.get('alertname') or labels.get('alertname')))
+        fields.extend((label, labels.get(key)) for label, key in (
+            ('Severity', 'severity'), ('Service', 'service_name'), ('Namespace', 'namespace'),
+            ('Cluster', 'cluster')))
+    else:
+        summary = 'An incident requires investigation. The cause has not yet been established.'
+    context = '\n'.join(
+        f'- **{label}:** <code>{escape(" ".join(str(value).split())[:256])}</code>'
+        for label, value in fields if isinstance(value, (str, int)) and value != '')
+    body = f'## Summary\n\n{summary}\n\n## Context\n\n{context}'
+    if link:
+        body += f'\n\n[View failed workflow run]({link})'
+    body += ('\n\n## Investigation\n\nThe lifecycle label and plan comment show current progress. '
+             'Raw event data and detailed diagnostics remain in the controller evidence store.'
+             '\n\n## Approval\n\nInvestigation does not authorize changes. '
+             'Implementation requires approval of the exact plan on this issue.')
+    return body
 
 
 class Runtime:
@@ -160,11 +204,14 @@ class Runtime:
                 for folder in [staged, *[p for p in staged.rglob('*') if p.is_dir()]]:
                     folder.chmod(0o777)
                 container = f'hermes-sdlc-{uuid.uuid4().hex}'
+                resources = project.get('sandbox_resources', {})
                 command = ['docker', 'run', '--rm', '--name', container, '--network', 'none',
                            '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-                           '--pids-limit', '128', '--memory', '512m', '--cpus', '1', '--user', '65534:65534',
-                           '--tmpfs', '/tmp:rw,noexec,nosuid,size=64m',
-                           '--tmpfs', '/work:rw,nosuid,size=256m,mode=1777', '--mount',
+                           '--pids-limit', str(resources.get('pids', 128)),
+                           '--memory', f'{resources.get("memory_mib", 512)}m',
+                           '--cpus', str(resources.get('cpus', 1)), '--user', '65534:65534',
+                           '--tmpfs', f'/tmp:rw,noexec,nosuid,size={resources.get("tmp_mib", 64)}m',
+                           '--tmpfs', f'/work:rw,exec,nosuid,size={resources.get("work_mib", 256)}m,mode=1777', '--mount',
                            f'type=bind,src={staged},dst=/input,readonly', '--workdir', '/work',
                            '--env', 'PYTHONDONTWRITEBYTECODE=1', '--entrypoint', '/bin/sh',
                            project['sandbox_image'], '-c', 'cp -R /input/. /work/ && exec "$@"',
@@ -239,8 +286,7 @@ class Runtime:
             raise AdapterError('Incident issue reconciliation exceeded its bounded history; human intervention required')
         issue = self.github('POST', f'/repos/{name}/issues', {
             'title': run['title'],
-            'body': '## Kira incident\n\nInvestigation and planning only. No changes are authorized until a human '
-                    'approves the exact plan posted below.\n\n' + run['body'][:50000] + '\n\n' + marker})
+            'body': _incident_body(name, run) + '\n\n' + marker})
         return issue['number']
 
     def incident_evidence(self, name, project, incident, workspace=None):

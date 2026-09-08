@@ -51,6 +51,36 @@ class Store:
                 CREATE TABLE IF NOT EXISTS controls (name TEXT PRIMARY KEY,value TEXT NOT NULL);
             ''')
         os.chmod(self.path, 0o600)
+        self._migrate_incidents()
+
+    @staticmethod
+    def _incident_keys(project, incident):
+        scope = [project, incident['source'], incident['provider']]
+        return (fingerprint([*scope, incident['identity']]),
+                fingerprint([*scope, incident['group']]))
+
+    def _migrate_incidents(self):
+        # Keep schema/backfill in a real transaction, separate from executescript.
+        from .incidents import normalize
+        with self.transaction() as db:
+            db.execute('CREATE TABLE IF NOT EXISTS incident_groups ('
+                       'run_id TEXT PRIMARY KEY REFERENCES runs(id), group_key TEXT NOT NULL)')
+            db.execute('CREATE INDEX IF NOT EXISTS incident_group_key ON incident_groups(group_key)')
+            db.execute('CREATE TABLE IF NOT EXISTS incident_observations ('
+                       'observation_key TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id))')
+            if db.execute("SELECT 1 FROM controls WHERE name='incident_groups_v1'").fetchone():
+                return
+            for row in db.execute("SELECT id,project,data FROM runs WHERE kind='incident' ORDER BY created,id").fetchall():
+                incident = json.loads(row['data']).get('incident')
+                if not incident:
+                    continue
+                normalized = normalize(incident['provider'], incident['payload'])
+                if normalized is None:
+                    continue
+                observation, group = self._incident_keys(row['project'], {**normalized, 'source': incident['source']})
+                db.execute('INSERT INTO incident_groups VALUES(?,?)', (row['id'], group))
+                db.execute('INSERT INTO incident_observations VALUES(?,?)', (observation, row['id']))
+            db.execute("INSERT INTO controls VALUES('incident_groups_v1','true')")
 
     @contextmanager
     def transaction(self):
@@ -92,6 +122,22 @@ class Store:
         key = f'{project}:{key or run_id}'
         now = time.time()
         with self.transaction() as db:
+            incident = (metadata or {}).get('incident') if coalesce else None
+            if incident:
+                observation, group = self._incident_keys(project, incident)
+                previous = db.execute(
+                    'SELECT r.* FROM incident_observations o JOIN runs r ON r.id=o.run_id '
+                    'WHERE o.observation_key=?', (observation,)).fetchone()
+                if previous:
+                    return self._run(previous)
+                previous = db.execute(
+                    'SELECT r.* FROM incident_groups g JOIN runs r ON r.id=g.run_id '
+                    "WHERE g.group_key=? AND r.state NOT IN ('verified','cancelled') "
+                    'ORDER BY r.created,r.id LIMIT 1', (group,)).fetchone()
+                if previous:
+                    db.execute('INSERT INTO incident_observations VALUES(?,?)', (observation, previous['id']))
+                    self._evidence(db, previous['id'], 'incident_repeated', {'incident': incident})
+                    return self._run(previous)
             previous = db.execute('SELECT * FROM runs WHERE dedup_key=?', (key,)).fetchone()
             if previous:
                 if coalesce and previous['project'] == project and previous['kind'] == kind:
@@ -102,6 +148,9 @@ class Store:
                 return self._run(previous)
             db.execute('INSERT INTO runs VALUES(?,?,?,?,?,?,?,?,?,?)',
                        (run_id, project, kind, title, body, 'queued', canonical(metadata or {}), now, now, key))
+            if incident:
+                db.execute('INSERT INTO incident_groups VALUES(?,?)', (run_id, group))
+                db.execute('INSERT INTO incident_observations VALUES(?,?)', (observation, run_id))
             self._job(db, run_id, 'plan', {}, f'{run_id}:plan:0')
             self._evidence(db, run_id, 'created', {'kind': kind, 'project': project})
             return self._run(db.execute('SELECT * FROM runs WHERE id=?', (run_id,)).fetchone())

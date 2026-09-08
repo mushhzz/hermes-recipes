@@ -122,9 +122,14 @@ class LifecycleScenarios(unittest.TestCase):
         self.assertFalse((self.root / 'app.py').exists())
 
     def test_protected_paths_stay_protected_even_with_broad_project_scope(self):
-        for path in ['.git/config', 'src/../../escape', '.env', 'src/private.key']:
+        for path in ['.git/config', 'src/../../escape', '.env', 'backend/.env.production', 'backend/.env.example.local', 'src/private.key']:
             with self.subTest(path=path), self.assertRaises(ConfigurationError):
                 safe_path(path)
+
+    def test_environment_template_can_be_checked_without_exposing_real_environment(self):
+        self.assertEqual(safe_path('backend/.env.example', ['backend/']), 'backend/.env.example')
+        with self.assertRaises(ConfigurationError):
+            safe_path('backend/.env.example', ['src/'])
 
     def test_wrong_revision_cannot_schedule_production_verification(self):
         engine = Engine(self.config)
