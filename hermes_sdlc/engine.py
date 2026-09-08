@@ -6,6 +6,7 @@ import re
 import threading
 import time
 from datetime import datetime, timezone
+from html import escape
 from pathlib import Path
 
 from .adapters import Runtime, AdapterError, timestamp
@@ -32,7 +33,6 @@ class Deferred(RuntimeError):
 
 def _plan_comment(run_id, spec, digest, *, state='awaiting_approval', approved_by=None, changes=()):
     """Present the unchanged, fingerprinted specification for human review."""
-    from html import escape
 
     def prose(value):
         # Contain model Markdown in its own block; it cannot hide later controls.
@@ -95,9 +95,9 @@ class Engine:
         if observation is None:
             return
         key = f'incident:{source}:{observation["identity"]}'
-        self.submit(project, 'incident', observation['title'], observation['body'], key,
-                    {'incident': {**observation, 'source': source, 'observed_at': time.time()}},
-                    coalesce=True)
+        return self.submit(project, 'incident', observation['title'], observation['body'], key,
+                           {'incident': {**observation, 'source': source, 'observed_at': time.time()}},
+                           coalesce=True)
 
     def authorize(self, project_name, actor):
         project = self.config['projects'][project_name]
@@ -595,17 +595,29 @@ class Engine:
     def status_text(self, run_id):
         run = self.store.get(run_id)
         data = run['data']
-        status = {'run': run_id, 'state': run['state'], 'specification_hash': data.get('spec_hash'),
-                  'head_sha': data.get('head_sha'), 'merge_sha': data.get('merge_sha'),
-                  'model_calls_in_current_allowance': data.get('model_calls', 0),
-                  'revisions': data.get('revisions', 0), 'recoveries': data.get('recoveries', 0)}
+        state = run['state'].replace('_', ' ').capitalize()
+        lines = ['## Kira status', '', f'**{state}**', '',
+                 f'- Run: <code>{escape(run_id)}</code>']
+        for label, key in (('Implementation commit', 'head_sha'), ('Merged commit', 'merge_sha')):
+            if data.get(key):
+                lines.append(f'- {label}: <code>{escape(str(data[key]))}</code>')
+        if run['state'] == 'needs_human':
+            lines.extend(['', 'Automatic work has stopped. Review the controller diagnostics before requesting recovery.'])
         for event in reversed(self.store.history(run_id)):
             if event['kind'] == 'checks':
-                status['checks'] = [{'name': c['name'], 'passed': c['passed']} for c in event['value']['results']]
+                lines.extend(['', '### Verification checks', ''])
+                lines.extend(f'- <code>{escape(str(check["name"]))}</code>: '
+                             + ('passed' if check['passed'] else 'failed')
+                             for check in event['value']['results'])
                 break
-        status['production'] = [{key: check.get(key) for key in ('name', 'passed', 'inconclusive', 'observed_sha')}
-                                for check in data.get('production_evidence', [])]
-        return '## Kira lifecycle status\n\n```json\n' + json.dumps(status, indent=2) + '\n```'
+        if data.get('production_evidence'):
+            lines.extend(['', '### Production checks', ''])
+            for check in data['production_evidence']:
+                result = 'inconclusive' if check.get('inconclusive') else 'passed' if check.get('passed') else 'failed'
+                lines.append(f'- <code>{escape(str(check.get("name", "Production")))}</code>: {result}')
+        if run['state'] == 'awaiting_deployment':
+            lines.extend(['', 'Implementation is merged. Deployment and production recovery are not yet verified.'])
+        return '\n'.join(lines)
 
     def handle_event(self, event):
         provider, kind, payload = event['provider'], event['type'], event['payload']
@@ -763,11 +775,16 @@ class Engine:
                 if job['run_id'] and self.store.get(job['run_id'])['state'] == 'needs_human':
                     try:
                         self.comment(self.store.get(job['run_id']), f'stopped-{job["id"]}',
-                                     self.status_text(job['run_id']) + '\n\nHuman attention required. Use `/sdlc recover RUN plan|revise|verify` after investigating.')
+                                     self.status_text(job['run_id']))
                     except Exception:
                         print('GitHub failure notification unavailable; durable failure evidence retained', flush=True)
         finally:
             stopped.set()
+            if job['run_id']:
+                try:
+                    self.sync_issue(self.store.get(job['run_id']))
+                except Exception:
+                    print('Issue label refresh unavailable; durable run state retained', flush=True)
             if job['run_id']:
                 try:
                     self.publish_plan(job['run_id'])

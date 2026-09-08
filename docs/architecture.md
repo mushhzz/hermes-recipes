@@ -28,6 +28,22 @@ The controller creates a Kira-owned issue, gathers bounded read-only evidence an
 
 Repeated observations append evidence without changing the original task or approved scope. Recovery signals do not start new remediation; missing logs or deployment proof never establish recovery. These integrations do not invoke tool-enabled gateway agents.
 
+Delivery IDs, observation identities and active incident groups are separate.
+CI executions group by workflow and PR (or event/ref without a PR); Grafana uses
+the configured notification group; ArgoCD uses application, namespace and reason.
+Without reliable grouping metadata, intake retains the narrower observation scope.
+New observations join the oldest unresolved matching run, including a human-stopped
+run, without restarting its model allowance or changing its approved specification.
+After verification or cancellation, a genuinely new observation starts fresh work;
+replaying an old observation still returns its original run. Transactional startup
+backfill preserves existing run, issue, approval and delivery identities. Existing
+duplicate issues require explicit reconciliation, not automatic approval transfer.
+
+GitHub receives bounded human-readable incident context and source links, not the
+raw provider envelope or internal investigation prompt. Detailed event data remains
+in private controller evidence. Issue labels refresh after failed planning even
+when no specification could be produced.
+
 ## Workflow and authority
 
 | Stage | Controller action | Required authority or evidence |

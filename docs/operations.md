@@ -51,7 +51,9 @@ Project settings live under `projects["OWNER/REPO"]` in the private configuratio
 
 Use a canonical GitHub HTTPS source for fresh remote checkouts. A local source must exist. Configuration, state and credentials must remain outside target checkouts.
 
-Install test dependencies into a trusted, preferably digest-pinned image. Checks have no network and cannot download packages. Images must provide `/bin/sh` and `cp`. Current limits include a 256 MiB work tmpfs, 64 MiB temporary tmpfs, 512 MiB memory, one CPU and 128 PIDs.
+Install test dependencies into a trusted, preferably digest-pinned image. Checks have no network and cannot download packages. Images must provide `/bin/sh` and `cp`. Default limits are a 256 MiB work tmpfs, 64 MiB temporary tmpfs, 512 MiB memory, one CPU and 128 PIDs. A project's optional `sandbox_resources` object accepts integer overrides: `work_mib` (64–16384), `tmp_mib` (16–4096), `memory_mib` (128–16384), `cpus` (1–8), and `pids` (32–1024). These change resource ceilings, not network, credential or filesystem isolation. The work tmpfs permits execution for dependency binaries; the temporary tmpfs remains non-executable.
+
+Credential-free `.env.example` templates follow ordinary repository-file access: tracked templates may enter model context, and tracked or nonignored untracked templates may be staged for checks. Read/check access is repository-wide; `allowed_paths` and the approved file list constrain writes, not reads. Changing a template still requires normal plan approval and write scope. Real `.env` files and other `.env.*` variants remain excluded. Template contents must contain no credentials.
 
 Docker startup failures are infrastructure failures, not requests to rewrite application code. On macOS, ensure Docker can access the private state directory used for staging.
 

@@ -24,7 +24,7 @@ def safe_path(value: str, allowed: list[str] | None = None) -> str:
     if path.is_absolute() or '..' in path.parts or str(path) != value:
         raise ConfigurationError(f'Non-canonical repository path: {value!r}')
     forbidden = {'.git', '.hermes', '.ssh', '.aws', '.kube', 'node_modules', '.venv', '__pycache__'}
-    if any(p in forbidden or p == '.env' or p.startswith('.env.') or p.endswith(('.pem', '.key')) for p in path.parts):
+    if any(p in forbidden or p == '.env' or (p.startswith('.env.') and p != '.env.example') or p.endswith(('.pem', '.key')) for p in path.parts):
         raise ConfigurationError(f'Protected repository path: {value}')
     if allowed is not None and not any(value == p or (p.endswith('/') and value.startswith(p)) for p in allowed):
         raise ConfigurationError(f'Path outside project write scope: {value}')
@@ -122,6 +122,15 @@ def load(path: str | Path = DEFAULT_CONFIG) -> dict:
                 raise ConfigurationError('Checks require name and nonempty argv strings')
         if not project.get('sandbox_image'):
             raise ConfigurationError('A trusted sandbox_image is required')
+        resources = project.setdefault('sandbox_resources', {})
+        bounds = {'memory_mib': (512, 128, 16384), 'work_mib': (256, 64, 16384),
+                  'tmp_mib': (64, 16, 4096), 'cpus': (1, 1, 8), 'pids': (128, 32, 1024)}
+        if not isinstance(resources, dict) or resources.keys() - bounds.keys():
+            raise ConfigurationError('Unknown sandbox resource setting')
+        for field, (default, minimum, maximum) in bounds.items():
+            value = resources.setdefault(field, default)
+            if type(value) is not int or not minimum <= value <= maximum:
+                raise ConfigurationError(f'Invalid sandbox resource limit: {field}')
         source = project.get('source', '')
         if source.startswith('https://'):
             if source != f'https://github.com/{name}.git':
