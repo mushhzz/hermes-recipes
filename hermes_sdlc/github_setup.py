@@ -23,6 +23,8 @@ def validate_policy(policy, config):
         raise ValueError('Ruleset enforcement must be disabled or active')
     if not isinstance(policy.get('ruleset_name'), str) or not policy['ruleset_name'].startswith('hermes-sdlc-'):
         raise ValueError('Managed ruleset names must start with hermes-sdlc-')
+    if type(policy.get('solo_maintainer', False)) is not bool:
+        raise ValueError('solo_maintainer must be a boolean')
     for key in ('required_workflows', 'required_check_contexts'):
         values = policy.get(key)
         if not isinstance(values, list) or not values or any(not isinstance(v, str) or not v.strip() for v in values):
@@ -60,13 +62,15 @@ def validate_policy(policy, config):
 
 
 def ruleset(policy):
+    solo = policy.get('solo_maintainer', False)
     return {'name': policy['ruleset_name'], 'target': 'branch', 'enforcement': policy['enforcement'],
             'bypass_actors': [], 'conditions': {'ref_name': {'include': ['~DEFAULT_BRANCH'], 'exclude': []}},
             'rules': [
                 {'type': 'deletion'}, {'type': 'non_fast_forward'},
                 {'type': 'pull_request', 'parameters': {
                     'dismiss_stale_reviews_on_push': True, 'require_code_owner_review': False,
-                    'require_last_push_approval': True, 'required_approving_review_count': 1,
+                    'require_last_push_approval': not solo, 'required_approving_review_count': 0 if solo else 1,
+                    'require_extra_approval_for_unattributed_changes': not solo,
                     'required_review_thread_resolution': True}},
                 {'type': 'required_status_checks', 'parameters': {
                     'strict_required_status_checks_policy': True,

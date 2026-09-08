@@ -95,7 +95,7 @@ For a new installation:
 5. Run the required workflow successfully on the default branch.
 6. Set desired enforcement to `active`, preview and apply.
 
-Activation fails closed when required inputs or evidence are missing. Protection requires human review, successful checks and resolved discussions; there are no bypass actors.
+Activation fails closed when required inputs or evidence are missing. By default, protection requires another human's approval, successful checks and resolved discussions; there are no bypass actors. A solo-owned repository can set `solo_maintainer: true` in its provisioning policy to remove approval-count, last-push approval and extra-approval requirements. PRs, required CI, resolved discussions, and force-push/deletion protection remain enforced. This repository opts into solo mode. Kira's separate human plan-approval gate is unchanged.
 
 `required_ci_checks` in controller configuration names workflows. The repository ruleset names check contexts. This repository uses workflow **Lifecycle verification** and contexts **regression (3.11)**, **regression (3.12)** and **regression (3.13)**.
 
